@@ -1,0 +1,9 @@
+program version
+  use cudafor
+  implicit none
+  integer :: istat, ver
+  istat = cudaDriverGetVersion(ver)
+  print *, 'Driver version:  ', ver
+  istat = cudaRuntimeGetVersion(ver)
+  print *, 'Runtime version: ', ver
+end program version

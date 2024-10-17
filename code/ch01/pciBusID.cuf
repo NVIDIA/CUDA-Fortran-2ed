@@ -1,0 +1,38 @@
+program pciBusID
+  use cudafor
+  implicit none
+
+  type (cudaDeviceProp) :: prop
+  integer :: nDevices=0, i, ierr
+  
+  ! Number of CUDA-capable devices
+
+  ierr = cudaGetDeviceCount(nDevices)
+
+  if (nDevices == 0) then
+     print "(/,'No CUDA devices found',/)"
+     stop
+  else if (nDevices == 1) then
+     print "(/,'One CUDA device found',/)"
+  else 
+     print "(/,i0,' CUDA devices found',/)", nDevices
+  end if
+
+  ! Loop over devices
+  
+  do i = 0, nDevices-1
+
+     print "('Device Number: ',i0)", i
+
+     ierr = cudaGetDeviceProperties(prop, i)
+
+     ! General device info
+
+     print "('  Device Name: ', a)", trim(prop%name)
+     print "('  Compute Capability: ',i0,'.',i0)", &
+          prop%major, prop%minor    
+     print "('  PCI Bus ID: ',i0)", prop%pciBusID
+
+  enddo
+
+end program pciBusID

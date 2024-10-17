@@ -1,0 +1,39 @@
+module m
+contains
+  attributes(global) subroutine increment(a, n, b)
+    implicit none
+    integer, intent(inout) :: a(*)
+    integer, value :: n, b
+    integer :: i
+
+    i = blockDim%x*(blockIdx%x-1) + threadIdx%x
+    if (i <= n) a(i) = a(i)+b
+
+  end subroutine increment
+end module m
+
+
+program multiblock
+  use cudafor
+  use m
+  implicit none
+  integer, parameter :: n = 1024*1024
+  integer, allocatable :: a(:)
+  integer, device, allocatable :: a_d(:)
+  integer :: b, tPB = 256
+
+  allocate(a(n), a_d(n))
+  a = 1
+  b = 3
+
+  a_d = a
+  call increment<<<(n-1)/tPB+1,tPB>>>(a_d, n, b)
+  a = a_d
+
+  if (any(a /= 4)) then
+     print *, '**** Program Failed ****'
+  else
+     print *, 'Program Passed'
+  endif
+  deallocate(a, a_d)
+end program multiblock

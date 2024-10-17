@@ -1,0 +1,24 @@
+program managedCUF
+  use cudafor
+  implicit none
+  integer, parameter :: nx=1024, ny=512
+  integer, managed :: a(nx,ny)
+  integer :: b, i, j
+
+  a = 1
+  b = 3
+  
+  !$cuf kernel do (2) <<<*,*>>>
+  do j = 1, ny
+     do i = 1, nx
+        a(i,j) = a(i,j) + b
+     enddo
+  enddo
+  i = cudaDeviceSynchronize()
+
+  if (any(a /= 4)) then
+     print *, '**** Program Failed ****'
+  else
+     print *, 'Program Passed'
+  endif
+end program managedCUF

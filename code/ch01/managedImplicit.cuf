@@ -1,0 +1,45 @@
+module m
+contains
+  attributes(global) subroutine increment(a, n1, n2, b)
+    implicit none
+    integer :: a(n1,n2)
+    integer, value :: n1, n2, b
+    integer :: i, j
+
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    j = (blockIdx%y-1)*blockDim%y + threadIdx%y
+    if (i<=n1 .and. j<=n2) a(i,j) = a(i,j) + b
+  end subroutine increment
+end module m
+
+
+
+program main
+  use cudafor
+  use m
+  implicit none
+  integer, parameter :: nx=1024, ny=512
+  integer, allocatable :: a(:,:)
+  integer :: b, istat
+  type(dim3) :: grid, tBlock 
+
+  allocate(a(nx,ny))
+  
+  a = 1
+  b = 3
+  
+  tBlock = dim3(32,8,1)
+  grid = dim3(ceiling(real(nx)/tBlock%x), &
+              ceiling(real(ny)/tBlock%y), 1)
+
+  call increment<<<grid,tBlock>>>(a, nx, ny, b)
+  istat = cudaDeviceSynchronize()
+
+  if (any(a /= 4)) then
+     print *, '**** Program Failed ****'
+  else
+     print *, 'Program Passed'
+  endif
+
+  deallocate(a)
+end program main

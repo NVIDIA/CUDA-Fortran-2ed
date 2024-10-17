@@ -1,0 +1,46 @@
+module m
+contains
+  attributes(global) subroutine increment(a, b)
+    implicit none
+    integer, intent(inout) :: a(*)
+    integer, value :: b
+    integer :: i
+
+    i = threadIdx%x
+    a(i) = a(i)+b
+
+  end subroutine increment
+end module m
+
+
+program asyncError
+  use cudafor
+  use m
+  implicit none
+  integer, parameter :: n = 5000
+  integer :: a(n), b
+  integer, device :: a_d(n)
+  integer :: ierrSync, ierrAsync
+
+  a = 1
+  b = 3
+
+  a_d = a
+  call increment<<<1,n>>>(a_d, b)
+  ierrSync = cudaGetLastError()
+  ierrAsync = cudaDeviceSynchronize()
+  a = a_d
+
+  if (ierrSync /= cudaSuccess) &
+       print *, 'Sync kernel error: ', &
+       trim(cudaGetErrorString(ierrSync))
+  if (ierrAsync /= cudaSuccess) &
+       print *, 'Async kernel error: ', &
+       trim(cudaGetErrorString(ierrAsync))
+
+  if (any(a /= 4)) then
+     print *, '**** Program Failed ****'
+  else
+     print *, 'Program Passed'
+  endif
+end program asyncError
