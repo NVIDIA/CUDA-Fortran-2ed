@@ -1,0 +1,28 @@
+program main
+  use cudafor
+  implicit none
+  integer, parameter :: n=1000000
+  integer(8), parameter :: n8 = n
+
+  real :: suminc = 0.0, sumdec = 0.0, a(n)
+  real, device :: a_d(n)
+  integer :: i
+  
+  do i = 1, n
+     a(i) = i
+     suminc = suminc + i
+  enddo
+
+  do i = n, 1, -1
+     sumdec = sumdec + i
+  end do
+
+  print *, 'n: ', n
+  print *,'n*(n+1)/2: ', n8/2*(n8+1)
+  
+  print *, 'from sum(a):         ', sum(a)  
+  print *, 'incr accumulation:   ', suminc
+  print *, 'decr accumulation:   ', sumdec
+  a_d = a
+  print *, 'from sum(a_d):       ', sum(a_d)
+end program main

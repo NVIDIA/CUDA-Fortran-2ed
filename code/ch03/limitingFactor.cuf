@@ -1,0 +1,51 @@
+module kernel_m
+contains
+  attributes(global) subroutine base(a, b)
+    real :: a(*), b(*)
+    integer :: i    
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    a(i) = sin(b(i)) + cos(b(i)) &
+         + sin(2.0*b(i)) + cos(2.0*b(i)) &
+         + sin(3.0*b(i)) + cos(3.0*b(i)) &
+         + sin(4.0*b(i)) + cos(4.0*b(i))
+  end subroutine base
+
+  attributes(global) subroutine memory(a, b)
+    real :: a(*), b(*)
+    integer :: i    
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    a(i) = b(i)
+  end subroutine memory
+
+  attributes(global) subroutine math(a, b, flag)
+    real :: a(*)
+    real, value :: b
+    integer, value :: flag
+    real :: v
+    integer :: i    
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    v = sin(b) + cos(b) &
+         + sin(2.0*b) + cos(2.0*b) &
+         + sin(3.0*b) + cos(3.0*b) &
+         + sin(4.0*b) + cos(4.0*b)
+    if (v*flag == 1) a(i) = v
+  end subroutine math
+end module kernel_m
+
+program limitingFactor
+  use cudafor
+  use kernel_m
+  
+  implicit none
+  
+  integer, parameter :: blockSize = 256
+  integer, parameter :: n = 64*1024*4*blockSize
+  real :: a(n)
+  real, device :: a_d(n), b_d(n)
+  b_d = 1.0
+  call base<<<n/blockSize,blockSize>>>(a_d, b_d)
+  call memory<<<n/blockSize,blockSize>>>(a_d, b_d)
+  call math<<<n/blockSize,blockSize>>>(a_d, 1.0, 0)
+  a = a_d
+  print *, a(1)
+end program limitingFactor

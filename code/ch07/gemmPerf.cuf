@@ -1,0 +1,94 @@
+program main
+  use cudafor
+  use cublas_v2
+  implicit none
+  integer, parameter :: m=3200, n=3200, k=3200
+
+  type(cublasHandle) :: handle
+  type(cudaDeviceProp) :: prop
+  type(cudaEvent) :: startEvent, stopEvent
+  real :: err, time
+  integer :: istat
+
+  istat = cudaGetDeviceProperties(prop, 0)
+  print "(' Device: ', a)", trim(prop%name)
+  print "(' m = ', i0, ', n = ', i0, ', k = ', i0)", m, n, k
+
+  istat = cublasCreate(handle)
+  istat = cudaEventCreate(startEvent)
+  istat = cudaEventCreate(stopEvent)
+
+  block
+    real(8) :: a(m,k), b(k,n), c(m,n), cref(m,n)
+    real(8), device :: a_d(m,k), b_d(k,n), c_d(m,n)
+
+    call random_number(a)
+    call random_number(b)
+    cref = matmul(a,b)
+  
+    a_d = a; b_d = b; c_d = 0.0
+    istat = cudaDeviceSynchronize()
+    istat = cudaEventRecord(startEvent, 0)
+    istat = cublasDGemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, &
+         m, n, k, 1.0_8, a_d, m, b_d, k, 0.0_8, c_d, n)
+    istat = cudaEventRecord(stopEvent, 0)
+    istat = cudaEventSynchronize(stopEvent)
+    c = c_d
+    istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+   
+    print *, 'DGEMM maxval(abs(cref-c)): ', maxval(abs(cref-c))
+    print *, 'DGEMM TFlops: ', 2.*k*m*n/(time/1000.)/1.0E+12
+    print *
+  end block
+
+  block
+    real(4) :: a(m,k), b(k,n), c(m,n), cref(m,n)
+    real(4), device :: a_d(m,k), b_d(k,n), c_d(m,n)
+
+    call random_number(a)
+    call random_number(b)
+    cref = matmul(a,b)
+  
+    a_d = a; b_d = b; c_d = 0.0
+    istat = cudaDeviceSynchronize()
+    istat = cudaEventRecord(startEvent, 0)
+    istat = cublasSGemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, &
+         m, n, k, 1.0, a_d, m, b_d, k, 0.0, c_d, n)
+    istat = cudaEventRecord(stopEvent, 0)
+    istat = cudaEventSynchronize(stopEvent)
+    c = c_d
+    istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+   
+    print *, 'SGEMM (FP32) maxval(abs(cref-c)): ', maxval(abs(cref-c))
+    print *, 'SGEMM (FP32) TFlops: ', 2.*k*m*n/(time/1000.)/1.0E+12
+    print *
+  end block
+
+  block
+    real(4) :: a(m,k), b(k,n), c(m,n), cref(m,n)
+    real(4), device :: a_d(m,k), b_d(k,n), c_d(m,n)
+
+    istat = cublasSetMathMode(handle, CUBLAS_TF32_TENSOR_OP_MATH)
+
+    call random_number(a)
+    call random_number(b)
+    cref = matmul(a,b)
+  
+    a_d = a; b_d = b; c_d = 0.0
+    istat = cudaDeviceSynchronize()
+    istat = cudaEventRecord(startEvent, 0)
+    istat = cublasSGemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, &
+         m, n, k, 1.0, a_d, m, b_d, k, 0.0, c_d, n)
+    istat = cudaEventRecord(stopEvent, 0)
+    istat = cudaEventSynchronize(stopEvent)
+    c = c_d
+    istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+   
+    print *, 'SGEMM (TF32) maxval(abs(cref-c)): ', maxval(abs(cref-c))
+    print *, 'SGEMM (TF32) TFlops: ', 2.*k*m*n/(time/1000.)/1.0E+12
+  end block
+
+  istat = cublasDestroy(handle)
+  istat = cudaEventDestroy(startEvent)
+  istat = cudaEventDestroy(stopEvent)
+end program main

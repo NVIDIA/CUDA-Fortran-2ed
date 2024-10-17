@@ -1,0 +1,36 @@
+module m
+  integer, constant :: b
+contains
+  attributes(global) subroutine increment(a)
+    implicit none
+    integer, intent(inout) :: a(*)
+    integer :: i
+
+    i = threadIdx%x
+    a(i) = a(i)+b
+
+  end subroutine increment
+end module m
+
+
+program incrementGPU
+  use cudafor
+  use m
+  implicit none
+  integer, parameter :: n = 256
+  integer :: a(n)  
+  integer, device :: a_d(n)
+
+  a = 1
+  b = 3
+
+  a_d = a
+  call increment<<<1,n>>>(a_d)
+  a = a_d
+
+  if (any(a /= 4)) then
+     print *, '**** Program Failed ****'
+  else
+     print *, 'Program Passed'
+  endif
+end program incrementGPU

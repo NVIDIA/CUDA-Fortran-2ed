@@ -1,0 +1,89 @@
+program sparseMatVec
+  use cudafor
+  use cusparseEx
+  use, intrinsic :: iso_fortran_env
+  
+  implicit none
+
+  integer, parameter :: n = 5   ! # rows/cols in matrix
+  integer, parameter :: nnz = 5 ! # nonzeros in matrix
+  integer, parameter :: fpKind = real32
+  
+  type(cusparseHandle) :: h
+  type(cusparseSpMatDescr) :: descrA
+  type(cusparseDnVecDescr) :: descrX, descrY
+
+  ! CSR matrix
+  real(fpKind), device :: csrValues_d(nnz) 
+  integer(4), device :: csrRowOffsets_d(n+1), csrColInd_d(nnz)
+  
+  ! dense vectors
+  real(fpKind), device :: x_d(n), y_d(n)
+  real(fpKind) :: y(n)
+  
+  ! parameters
+  real(fpKind) :: alpha, beta
+
+  integer :: status, i
+
+  if (fpKind == real32) then
+     print *, 'Using single precision'
+  else
+     print *, 'Using double precision'
+  endif
+     
+  
+  ! initalize cusparse  
+  status = cusparseCreate(h)
+
+  ! CSR representation for upper circular shift matrix
+  csrValues_d = 1.0
+  csrColInd_d = [2, 3, 4, 5, 1]
+  csrRowOffsets_d = [1, 2, 3, 4, 5, 6]
+
+  ! vectors
+  x_d = [11.0, 12.0, 13.0, 14.0, 15.0]
+  y_d = 0.0
+
+  y = x_d
+  print *, 'Original vector' 
+  print "(5(1x,f7.2))", y
+
+  ! initialize sparse matrix descriptor A in CSR format
+  status = cusparseCreateCsr(descrA, & 
+       n, csrRowOffsets_d, csrColInd_d, csrValues_d)
+ 
+  ! initialize the dense vector descriptors for X and Y
+  status = cusparseCreateDnVec(descrX, x_d)
+  status = cusparseCreateDnVec(descrY, y_d)
+
+  ! y = alpha*A*x + beta*y
+
+  alpha = 1.0
+  beta = 0.0
+  status = cusparseSpMV(h, CUSPARSE_OPERATION_NON_TRANSPOSE, &
+       alpha, descrA, descrX, beta, descrY)
+       
+  y = y_d
+  print *, 'Shifted vector' 
+  print "(5(1x,f7.2))", y
+
+  ! shift down and subtract original
+  ! x = alpha*(A')*y + beta*x
+
+  alpha = 1.0
+  beta = -1.0
+  status = cusparseSpMV(h, CUSPARSE_OPERATION_TRANSPOSE, &
+       alpha, descrA, descrY, beta, descrX)
+       
+  y = x_d
+  print *, 'Max error: ', maxval(abs(y)) 
+
+  ! cleanup
+
+  status = cusparseDestroySpMat(descrA)
+  status = cusparseDestroyDnVec(descrX)
+  status = cusparseDestroyDnVec(descrY)
+  status = cusparseDestroy(h)
+  
+end program sparseMatVec

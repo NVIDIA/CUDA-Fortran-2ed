@@ -1,0 +1,20 @@
+module mpiDeviceUtil
+contains
+  !  assign a different GPU to each MPI rank
+  !  note: all the memory allocations should be dynamic, 
+  !  otherwise all the arrays will be allocated on device 0
+  subroutine assignDevice(dev)
+    use mpi
+    use cudafor
+    implicit none
+    integer :: dev
+    integer :: local_comm,  ierr
+
+    dev=0
+    call MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, &
+         MPI_INFO_NULL, local_comm, ierr)
+    call MPI_Comm_rank(local_comm, dev, ierr)
+    ierr = cudaSetDevice(dev)
+  end subroutine assignDevice
+end module mpiDeviceUtil
+

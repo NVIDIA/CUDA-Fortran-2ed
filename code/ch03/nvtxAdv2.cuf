@@ -1,0 +1,17 @@
+program main
+  use nvtx
+  implicit none
+  integer, parameter :: n=4
+  type(nvtxRangeId) :: id(n)
+  character(len=4) :: ichar
+  integer :: i
+  
+  do i=1, n
+     write(ichar,'(i4)') i
+     id(i) = nvtxRangeStart('Label '//ichar)
+     call sleep(1)
+     if (i>1) call nvtxRangeEnd(id(i-1))
+  enddo
+  
+  call nvtxRangeEnd(id(n))  
+end program main

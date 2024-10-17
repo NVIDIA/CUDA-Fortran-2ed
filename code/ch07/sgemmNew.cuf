@@ -1,0 +1,38 @@
+program sgemmNew
+  use cublas
+  use cudafor
+  implicit none
+  integer, parameter :: m = 100, n = 100, k = 100
+  real :: a(m,k), b(k,n), c(m,n)
+  real, device :: a_d(m,k), b_d(k,n), c_d(m,n)
+  real, parameter :: alpha = 1.0, beta = 0.0
+  real, device :: alpha_d, beta_d
+  integer :: lda = m, ldb = k, ldc = m
+  type(cublasHandle) :: h
+  integer :: istat
+
+  a = 1.0; b = 2.0; c = 0.0
+  a_d = a; b_d = b; c_d = 0.0
+
+  istat = cublasCreate(h)
+  if (istat /= CUBLAS_STATUS_SUCCESS) &
+       print *, 'Error initializing CUBLAS'
+  
+  
+  istat = cublasSgemm_v2(h, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &
+       alpha, a_d, lda, b_d, ldb, beta, c_d, ldc)
+  c = c_d
+  print *, 'cublasSgemm error =', maxval(c-k*2.0)
+
+  alpha_d = alpha; beta_d = beta
+
+  istat = cublasSgemm_v2(h, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &
+       alpha_d, a_d, lda, b_d, ldb, beta_d, c_d, ldc)
+  c = c_d
+  print *, 'cublasSgemm error =', maxval(c-k*2.0)
+
+
+  istat = cublasDestroy(h)
+  if (istat /= CUBLAS_STATUS_SUCCESS) &
+       print *, 'Error shutting down CUBLAS'
+end program sgemmNew

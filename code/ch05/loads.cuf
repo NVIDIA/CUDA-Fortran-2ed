@@ -1,0 +1,43 @@
+module m
+contains
+  attributes(global) subroutine k(b,a)
+    implicit none
+    real :: b(*), a(*)
+    integer :: i
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    b(i) = a(i)
+  end subroutine k
+
+  attributes(global) subroutine k_ii(b,a)
+    implicit none
+    real :: b(*)
+    real, intent(in) :: a(*)
+    integer :: i
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    b(i) = a(i)
+  end subroutine k_ii
+
+  attributes(global) subroutine k_ca(b,a)
+    implicit none
+    real :: b(*), a(*)
+    integer :: i
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    b(i) = __ldca(a(i))
+  end subroutine k_ca
+
+  attributes(global) subroutine k_cg(b,a)
+    implicit none
+    real :: b(*), a(*)
+    integer :: i
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    b(i) = __ldcg(a(i))
+  end subroutine k_cg
+
+  attributes(global) subroutine k_cv(b,a)
+    implicit none
+    real :: b(*), a(*)
+    integer :: i
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    b(i) = __ldcv(a(i))
+  end subroutine k_cv
+end module m

@@ -1,0 +1,104 @@
+program async
+  use cudafor
+  implicit none
+  integer, parameter :: maxStreams = 64
+  integer, parameter :: n = maxStreams*1024*1024
+
+  real(8), pinned, allocatable :: a(:), b(:)
+  real(8), device :: a_d(n), b_d(n)
+  real(8) :: gold(n)
+
+  integer(kind=cuda_stream_kind) :: stream(maxStreams)
+  type (cudaEvent) :: startEvent, stopEvent
+
+  real :: time
+  integer :: nStreams, i, j, offset, istat
+
+  block 
+    type (cudaDeviceProp) :: prop
+    istat = cudaGetDeviceProperties(prop, 0)
+    print "(' Device: ', a)", trim(prop%name)
+    print "(' Array size (MB): ', f8.2)", real(n)*8/1000/1000
+    print "(/,'        Streams  time (ms)' )"
+  end block
+    
+  block
+    logical :: pinnedFlag    
+    ! allocate pinned  host memory
+    allocate(a(n), STAT=istat, PINNED=pinnedFlag)
+    if (istat /= 0) then
+       print *, 'Allocation of a failed'
+       stop
+    else
+       if (.not. pinnedFlag) &
+            print *, 'Pinned a allocation failed'
+    end if
+    allocate(b(n), STAT=istat, PINNED=pinnedFlag)
+    if (istat /= 0) then
+       print *, 'Allocation of b failed'
+       stop
+    else
+       if (.not. pinnedFlag) &
+            print *, 'Pinned b allocation failed'
+    end if
+  end block
+
+  ! create events and streams
+  istat = cudaEventCreate(startEvent)
+  istat = cudaEventCreate(stopEvent)  
+
+  do i = 1, maxStreams
+     istat = cudaStreamCreate(stream(i))
+  enddo
+  
+  call random_number(a)
+  gold = 0.0
+  
+  ! warm up
+  a_d = a
+  !$cuf kernel do <<<*,*>>>
+  do i = 1, n     
+     b_d(i) = sin(a_d(i)) + sin(2*a_d(i)) &
+          + sin(3*a_d(i)) + sin(4*a_d(i))
+  enddo
+  gold = b_d
+
+  nStreams = 1
+  do
+     istat = cudaEventRecord(startEvent,0)
+     do j = 1, nStreams
+        offset = (j-1)*(n/nStreams) 
+        istat = cudaMemcpyAsync(a_d(offset+1), a(offset+1), &
+             n/nStreams, stream(j))
+
+        !$cuf kernel do <<<*,*,0,stream(j)>>>
+        do i = offset+1, offset+n/nStreams
+           b_d(i) = sin(a_d(i)) + sin(2*a_d(i)) &
+                + sin(3*a_d(i)) + sin(4*a_d(i))
+        enddo
+     
+        istat = cudaMemcpyAsync(b(offset+1), b_d(offset+1), &
+             n/nStreams, stream(j))
+     enddo
+     istat = cudaEventRecord(stopEvent, 0)
+     istat = cudaEventSynchronize(stopEvent)
+     istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+     if (maxval(abs(gold-b)) > 0.0) then
+        print *, n, ' *** Error ***'
+     else
+        print *, nStreams, time
+     end if
+     nStreams = nStreams*2
+     if (nStreams > maxStreams) exit
+  enddo
+     
+  ! cleanup
+  istat = cudaEventDestroy(startEvent)
+  istat = cudaEventDestroy(stopEvent)
+  do j = 1, maxStreams
+     istat = cudaStreamDestroy(stream(j))
+  enddo
+  deallocate(a, b)
+
+end program async
+

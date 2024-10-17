@@ -1,0 +1,286 @@
+module m
+  use, intrinsic :: iso_fortran_env
+  integer, parameter :: fpKind=real32
+  integer, parameter :: N = 1024*1024
+  integer, parameter :: ILP=4
+contains
+
+  ! simple copy code that requires thread-level paralellism
+  ! to hide global memory latencies
+
+  attributes(global) subroutine copy(odata, idata)
+    implicit none
+    real(fpKind) :: odata(*), idata(*), tmp
+    integer :: i
+    
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    tmp = idata(i) 
+    odata(i) = tmp 
+  end subroutine copy
+
+  ! copy code which uses instruction-level parallelism 
+  ! in addition to thread-level parallelism to hide
+  ! global memory latencies via thread-private array
+
+  attributes(global) subroutine copy_ILP(odata, idata)
+    implicit none
+    real(fpKind) :: odata(*), idata(*), tmp(ILP)
+    integer :: i,j
+    
+    i = (blockIdx%x-1)*blockDim%x*ILP + threadIdx%x
+
+    do j = 1, ILP
+       tmp(j) = idata(i+(j-1)*blockDim%x)
+    enddo
+
+    do j = 1, ILP
+       odata(i+(j-1)*blockDim%x) = tmp(j)
+    enddo
+  end subroutine copy_ILP
+
+  ! copy code which uses instruction-level parallelism 
+  ! in addition to thread-level parallelism to hide
+  ! global memory latencies via shared memory
+
+  attributes(global) subroutine copy_ILP_shared(odata, idata)
+    implicit none
+    real(fpKind) :: odata(*), idata(*)
+    real(fpKind), shared :: tmp(blockDim%x, ILP)
+    integer :: i,j
+    
+    i = (blockIdx%x-1)*blockDim%x*ILP + threadIdx%x
+
+    do j = 1, ILP
+       tmp(threadIdx%x,j) = idata(i+(j-1)*blockDim%x)
+    enddo
+
+    do j = 1, ILP
+       odata(i+(j-1)*blockDim%x) = tmp(threadIdx%x,j)
+    enddo
+  end subroutine copy_ILP_shared
+
+  ! copy code which uses instruction-level parallelism 
+  ! in addition to thread-level parallelism to hide
+  ! global memory latencies via async shared memory loads
+
+  attributes(global) subroutine copy_ILP_sharedAsync(odata, idata)
+    use wmma
+    implicit none
+    real(fpKind) :: odata(*), idata(*)
+    real(fpKind), shared :: tmp(blockDim%x, ILP)
+    integer :: i,j
+    
+    i = (blockIdx%x-1)*blockDim%x*ILP + threadIdx%x
+
+    do j = 1, ILP
+       call pipelineMemcpyAsync(tmp(threadIdx%x,j), &
+            idata(i+(j-1)*blockDim%x))
+       call pipelineCommit()
+    enddo
+
+    do j = 1, ILP
+       call pipelineWaitPrior(ILP-j)
+       odata(i+(j-1)*blockDim%x) = tmp(threadIdx%x,j)
+    enddo
+  end subroutine copy_ILP_sharedAsync
+
+end module m
+
+program parallelism
+  use cudafor
+  use m
+  
+  implicit none
+
+  type(dim3) :: grid, threadBlock
+  type(cudaEvent) :: startEvent, stopEvent
+  type(cudaDeviceProp) :: prop
+
+  real(fpKind) :: a(N), b(N)
+  real(fpKind), device :: a_d(N), b_d(N)
+
+  real :: time, occupancy
+  integer :: i, smBytes, istat, maxBlocks
+
+  
+  istat = cudaGetDeviceProperties(prop, 0)
+  print "(/,'Device Name: ',a)", trim(prop%name)
+  print "('Compute Capability: ',i0,'.',i0)", &
+       prop%major, prop%minor
+  if (fpKind == real32) then
+     print "('Single Precision')"
+  else
+     print "('Double Precision')"
+  end if
+
+  a = 1.0
+  a_d = a
+
+  istat = cudaEventCreate(startEvent)
+  istat = cudaEventCreate(stopEvent)
+
+  print '(/,"Thread-level parallelism runs")'
+
+  print '(/,"  Multiple Blocks per Multiprocessor")'
+  print '(a20,a25,a19)', 'Threads/Block', 'Bandwidth (GB/s)', 'Occupancy (%)'
+
+  do i = prop%warpSize, prop%maxThreadsPerBlock, prop%warpSize
+     if (mod(N,i) /= 0) cycle 
+
+     b_d = 0.0     
+
+     grid = dim3(ceiling(real(N)/i),1,1)
+     threadBlock = dim3(i,1,1)
+     
+     istat = cudaEventRecord(startEvent,0)
+     call copy<<<grid, threadBlock>>>(b_d, a_d)
+     istat = cudaEventRecord(stopEvent,0)
+     istat = cudaEventSynchronize(stopEvent)
+     istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+     
+     istat = cudaOccupancyMaxActiveBlocksPerMultiprocessor( &
+          maxBlocks, copy, i, 0)
+     occupancy = 100.*maxBlocks*i/prop%maxThreadsPerMultiprocessor
+     b = b_d
+     if (all(b==a)) then
+        print '(i20, f20.2, f20.2)', i, 2.*1000*sizeof(a)/(1024**3*time), occupancy
+     else
+        print '(a20)', '*** Failed ***'
+     end if
+  end do
+
+  print '(/,"  Single Block per Multiprocessor")'
+  print '(a20,a25,a19)', 'Threads/Block', 'Bandwidth (GB/s)', 'Occupancy (%)'
+
+  smBytes = prop%sharedMemPerBlockOptIn
+  istat = cudaFuncSetAttribute(copy, &
+       cudaFuncAttributeMaxDynamicSharedMemorySize, &
+       smBytes)  
+
+  do i = prop%warpSize, prop%maxThreadsPerBlock, prop%warpSize
+     if (mod(N,i) /= 0) cycle 
+
+     b_d = 0.0     
+
+     grid = dim3(ceiling(real(N)/i),1,1)
+     threadBlock = dim3(i,1,1)
+
+     istat = cudaEventRecord(startEvent,0)
+     call copy<<<grid, threadBlock, smBytes>>>(b_d, a_d)
+     istat = cudaEventRecord(stopEvent,0)
+     istat = cudaEventSynchronize(stopEvent)
+     istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+     
+     istat = cudaOccupancyMaxActiveBlocksPerMultiprocessor( &
+          maxBlocks, copy, i, smBytes)
+     occupancy = 100.*maxBlocks*i/prop%maxThreadsPerMultiprocessor
+     b = b_d
+     if (all(b==a)) then
+        print '(i20, f20.2, f20.2)', i, &
+             2.*1000*sizeof(a)/(1024**3*time), occupancy
+     else
+        print '(a20)', '*** Failed ***'
+     end if
+  end do
+
+  print '(/,"Instruction-level parallelism runs")'
+
+  print '(/,"  Register ILP=",i0,", Single Block per Multiprocessor")', ILP
+  print '(a20,a25,a19)', 'Threads/Block', 'Bandwidth (GB/s)', 'Occupancy (%)'
+
+  istat = cudaFuncSetAttribute(copy_ILP, &
+       cudaFuncAttributeMaxDynamicSharedMemorySize, &
+       smBytes)  
+  
+  do i = prop%warpSize, prop%maxThreadsPerBlock, prop%warpSize
+     if (mod(N,i) /= 0) cycle 
+
+     b_d = 0.0     
+
+     grid = dim3(ceiling(real(N)/(i*ILP)),1,1)
+     threadBlock = dim3(i,1,1)
+
+     istat = cudaEventRecord(startEvent,0)
+     call copy_ILP<<<grid, threadBlock, smBytes>>>(b_d, a_d)
+     istat = cudaEventRecord(stopEvent,0)
+     istat = cudaEventSynchronize(stopEvent)
+     istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+     
+     istat = cudaOccupancyMaxActiveBlocksPerMultiprocessor( &
+          maxBlocks, copy_ILP, i, smBytes)
+     occupancy = 100.*maxBlocks*i/prop%maxThreadsPerMultiprocessor
+     b = b_d
+     if (all(b==a)) then
+        print '(i20, f20.2, f20.2)', i, 2.*1000*sizeof(a)/(1024**3*time), occupancy
+     else
+        print '(a20)', '*** Failed ***'
+     end if
+  end do
+
+  print '(/,"  Shared Memory ILP=",i0,", Single Block per Multiprocessor")', ILP
+  print '(a20,a25,a19)', 'Threads/Block', 'Bandwidth (GB/s)', 'Occupancy (%)'
+
+  istat = cudaFuncSetAttribute(copy_ILP_shared, &
+       cudaFuncAttributeMaxDynamicSharedMemorySize, &
+       smBytes)  
+  
+  do i = prop%warpSize, prop%maxThreadsPerBlock, prop%warpSize
+     if (mod(N,i) /= 0) cycle 
+
+     b_d = 0.0     
+
+     grid = dim3(ceiling(real(N)/(i*ILP)),1,1)
+     threadBlock = dim3(i,1,1)
+
+     istat = cudaEventRecord(startEvent,0)
+     call copy_ILP_shared<<<grid, threadBlock, smBytes>>>(b_d, a_d)
+     istat = cudaEventRecord(stopEvent,0)
+     istat = cudaEventSynchronize(stopEvent)
+     istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+     
+     istat = cudaOccupancyMaxActiveBlocksPerMultiprocessor( &
+          maxBlocks, copy_ILP_shared, i, smBytes)
+     occupancy = 100.*maxBlocks*i/prop%maxThreadsPerMultiprocessor
+     b = b_d
+     if (all(b==a)) then
+        print '(i20, f20.2, f20.2)', i, 2.*1000*sizeof(a)/(1024**3*time), occupancy
+     else
+        print *, b(1:3)
+        print '(a20)', '*** Failed ***'
+     end if
+  end do
+
+  print '(/,"  Async Shared Memory ILP=",i0,", Single Block per Multiprocessor")', ILP
+  print '(a20,a25,a19)', 'Threads/Block', 'Bandwidth (GB/s)', 'Occupancy (%)'
+
+  istat = cudaFuncSetAttribute(copy_ILP_sharedAsync, &
+       cudaFuncAttributeMaxDynamicSharedMemorySize, &
+       smBytes)  
+  
+  do i = prop%warpSize, prop%maxThreadsPerBlock, prop%warpSize
+     if (mod(N,i) /= 0) cycle 
+
+     b_d = 0.0     
+
+     grid = dim3(ceiling(real(N)/(i*ILP)),1,1)
+     threadBlock = dim3(i,1,1)
+
+     istat = cudaEventRecord(startEvent,0)
+     call copy_ILP_sharedAsync<<<grid, threadBlock, smBytes>>>(b_d, a_d)
+     istat = cudaEventRecord(stopEvent,0)
+     istat = cudaEventSynchronize(stopEvent)
+     istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+     
+     istat = cudaOccupancyMaxActiveBlocksPerMultiprocessor( &
+          maxBlocks, copy_ILP_sharedAsync, i, smBytes)
+     occupancy = 100.*maxBlocks*i/prop%maxThreadsPerMultiprocessor
+     b = b_d
+     if (all(b==a)) then
+        print '(i20, f20.2, f20.2)', i, 2.*1000*sizeof(a)/(1024**3*time), occupancy
+     else
+        print *, b(1:3)
+        print '(a20)', '*** Failed ***'
+     end if
+  end do
+
+end program parallelism

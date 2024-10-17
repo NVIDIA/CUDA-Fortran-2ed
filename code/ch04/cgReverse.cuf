@@ -1,0 +1,46 @@
+module reverse
+contains
+  attributes(global) subroutine blockReverse(d, n)
+    use cooperative_groups
+    implicit none
+    real :: d(n)
+    integer, value :: n
+    real, shared :: s(n)    
+    integer :: t, tr
+    type(thread_group) :: tg
+
+    tg = this_thread_block()
+
+    t = threadIdx%x
+    tr = blockDim%x-t+1
+
+    s(t) = d(t)
+    call syncthreads(tg)  
+    d(t) = s(tr)
+  end subroutine blockReverse
+end module reverse
+
+
+program cgReverse
+  use cudafor
+  use reverse
+
+  implicit none
+
+  integer, parameter :: n = 64
+  real :: a(n), r(n), d(n)
+  real, device :: d_d(n)
+  integer :: i
+
+  do i = 1, n
+     a(i) = i
+     r(i) = n-i+1
+  enddo
+
+  d_d = a
+  call blockReverse<<<1, n, 4*n>>>(d_d, n)
+  d = d_d
+  print *, 'blockReverse max error:', maxval(abs(r-d))
+end program cgReverse
+
+

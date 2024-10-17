@@ -322,7 +322,7 @@ limitations under the License.
   * Section 12.5: `normal.F90` calculates surface normals, and `twoSpheres.F90`
   accommodates mutiple objects
 
-  * Section 12.6: `antialias.F90` shows are multiple rays per pixel are used
+  * Section 12.6: `antialias.F90` shows how multiple rays per pixel are used
   in antialiasing
 
   * Section 12.7.1: `diffuse.F90` generates an image of a sphere with a Lambertian

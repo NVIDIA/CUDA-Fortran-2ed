@@ -1,0 +1,27 @@
+module m
+contains
+  attributes(global) subroutine assumedSizeArrays(a, b, c, nx, ny)
+    implicit none
+    real :: a(nx,ny,*), b(nx,ny,*), c(nx,ny,*)
+    integer, value :: nx, ny
+    integer :: i, j, k
+
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    j = (blockIdx%y-1)*blockDim%y + threadIdx%y
+    k = (blockIdx%z-1)*blockDim%z + threadIdx%z
+
+    c(i,j,k) = a(i,j,k) + b(i,j,k)
+  end subroutine assumedSizeArrays
+
+  attributes(global) subroutine assumedShapeArrays(a, b, c)
+    implicit none
+    real :: a(:,:,:), b(:,:,:), c(:,:,:)
+    integer :: i, j, k
+
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    j = (blockIdx%y-1)*blockDim%y + threadIdx%y
+    k = (blockIdx%z-1)*blockDim%z + threadIdx%z
+
+    c(i,j,k) = a(i,j,k) + b(i,j,k)
+  end subroutine assumedShapeArrays
+end module m

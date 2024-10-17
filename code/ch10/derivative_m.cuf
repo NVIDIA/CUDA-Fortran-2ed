@@ -1,0 +1,406 @@
+! This file contains the setup host code and kernels for 
+! calculating derivatives using a 9-point finite difference
+! stencil
+
+module derivative_m
+  use cudafor
+  use precision_m
+
+  integer, parameter :: mx = 128, my = 128, mz = 128
+  real(fp_kind) :: x(mx), y(my), z(mz)
+
+  ! shared memory tiles will be m*-by-*Pencils
+  ! sPencils is used when each thread calculates
+  !   the derivative at one point
+  ! lPencils is used for coalescing in y and z
+  !   where each thread has to calculate the
+  !   derivative at mutiple points
+
+  integer, parameter :: sPencils = 2   ! small # pencils
+  integer, parameter :: lPencils = 32  ! large # pencils
+  
+  type(dim3) :: g_sp(3), b_sp(3)
+  type(dim3) :: g_lp(3), b_lp(3)
+
+  ! stencil coefficients
+
+  real(fp_kind), constant :: ax_c, bx_c, cx_c, dx_c
+  real(fp_kind), constant :: ay_c, by_c, cy_c, dy_c
+  real(fp_kind), constant :: az_c, bz_c, cz_c, dz_c
+ 
+contains
+
+  ! host routine to set constant data
+
+  subroutine setDerivativeParameters()
+
+    implicit none
+
+    real(fp_kind) :: dsinv
+    integer :: i, j, k
+
+    ! check to make sure dimensions are multiples of sPencils
+    if (mod(my,sPencils) /= 0) then
+       print *, '"my" must be a multiple of sPencils'
+       stop
+    end if
+
+    if (mod(mx,sPencils) /= 0) then
+       print *, '"mx" must be a multiple of sPencils', &
+            ' (for y-deriv)'
+       stop
+    end if
+
+    if (mod(mz,sPencils) /= 0) then
+       print *, '"mz" must be a multiple of sPencils', & 
+            ' (for z-deriv)'
+       stop
+    end if
+
+    if (mod(mx,lPencils) /= 0) then
+       print *, '"mx" must be a multiple of lPencils'
+       stop
+    end if
+
+    if (mod(my,lPencils) /= 0) then
+       print *, '"my" must be a multiple of lPencils'
+       stop
+    end if
+
+    ! stencil weights (for unit length problem)
+
+    dsinv = real(mx-1)
+    do i = 1, mx
+       x(i) = (i-1.)/(mx-1.)
+    enddo
+    ax_c =  4./  5. * dsinv
+    bx_c = -1./  5. * dsinv
+    cx_c =  4./105. * dsinv
+    dx_c = -1./280. * dsinv
+
+    dsinv = real(my-1)
+    do j = 1, my
+       y(j) = (j-1.)/(my-1.)
+    enddo
+    ay_c =  4./  5. * dsinv
+    by_c = -1./  5. * dsinv
+    cy_c =  4./105. * dsinv
+    dy_c = -1./280. * dsinv
+
+    dsinv = real(mz-1)
+    do k = 1, mz
+       z(k) = (k-1.)/(mz-1.)
+    enddo
+    az_c =  4./  5. * dsinv
+    bz_c = -1./  5. * dsinv
+    cz_c =  4./105. * dsinv
+    dz_c = -1./280. * dsinv
+
+    ! Execution configurations for small and 
+    ! large pencil tiles
+
+    g_sp(1) = dim3(my/sPencils,mz,1)
+    b_sp(1) = dim3(mx,sPencils,1)
+
+    g_lp(1) = dim3(my/lPencils,mz,1)
+    b_lp(1) = dim3(mx,sPencils,1)
+
+    g_sp(2) = dim3(mx/sPencils,mz,1)
+    b_sp(2) = dim3(sPencils,my,1)
+
+    g_lp(2) = dim3(mx/lPencils,mz,1)
+    ! we want to use the same number of threads as above.
+    ! so if we use lPencils instead of sPencils in one
+    ! dimension, we multiply the other by sPencils/lPencils
+    b_lp(2) = dim3(lPencils, my*sPencils/lPencils,1)
+
+    g_sp(3) = dim3(mx/sPencils,my,1)    
+    b_sp(3) = dim3(sPencils,mz,1)
+
+    g_lp(3) = dim3(mx/lPencils,my,1)    
+    b_lp(3) = dim3(lPencils, mz*sPencils/lPencils,1)
+
+  end subroutine setDerivativeParameters
+
+  ! -------------
+  ! x derivatives
+  ! -------------
+
+  attributes(global) subroutine deriv_x(f, df)
+    implicit none
+
+    real(fp_kind), intent(in) :: f(mx,my,mz)
+    real(fp_kind), intent(out) :: df(mx,my,mz)
+
+    real(fp_kind), shared :: f_s(-3:mx+4,sPencils)
+
+    integer :: i,j,k,j_l
+
+    i = threadIdx%x
+    j = (blockIdx%x-1)*blockDim%y + threadIdx%y
+    ! j_l is local variant of j for accessing shared memory
+    j_l = threadIdx%y            
+    k = blockIdx%y
+
+    f_s(i,j_l) = f(i,j,k)
+
+    call syncthreads()
+
+    ! fill in periodic images in shared memory array 
+
+    if (i <= 4) then
+       f_s(i-4, j_l) = f_s(mx+i-5,j_l) 
+       f_s(mx+i,j_l) = f_s(i+1,   j_l)   
+    endif
+
+    call syncthreads()
+
+    df(i,j,k) = &
+         (ax_c *( f_s(i+1,j_l) - f_s(i-1,j_l) )   &
+         +bx_c *( f_s(i+2,j_l) - f_s(i-2,j_l) )   &
+         +cx_c *( f_s(i+3,j_l) - f_s(i-3,j_l) )   &
+         +dx_c *( f_s(i+4,j_l) - f_s(i-4,j_l) ))
+ 
+  end subroutine deriv_x
+
+  ! this version avoids the first syncthreads() call
+  ! in the above version by using the same thread
+  ! to write and read the same shared memory value
+
+  attributes(global) subroutine deriv_x_1sync(f, df)
+    implicit none
+
+    real(fp_kind), intent(in) :: f(mx,my,mz)
+    real(fp_kind), intent(out) :: df(mx,my,mz)
+
+    real(fp_kind), shared :: f_s(-3:mx+4,sPencils)
+
+    integer :: i,j,k,j_l
+
+    i = threadIdx%x
+    j = (blockIdx%x-1)*blockDim%y + threadIdx%y
+    ! j_l is local variant of j for accessing shared memory
+    j_l = threadIdx%y            
+    k = blockIdx%y
+
+    f_s(i,j_l) = f(i,j,k)
+
+    ! fill in periodic images in shared memory array 
+    ! Use the same thread, (i,j_l), on the RHS that was used
+    ! to read the value in, so no syncthreads is needed
+
+    if (i>mx-5 .and. i<mx) f_s(i-(mx-1),j_l) = f_s(i,j_l)
+    if (i>1    .and. i<6 ) f_s(i+(mx-1),j_l) = f_s(i,j_l) 
+
+    call syncthreads()
+
+    df(i,j,k) = &
+         (ax_c *( f_s(i+1,j_l) - f_s(i-1,j_l) )   &
+         +bx_c *( f_s(i+2,j_l) - f_s(i-2,j_l) )   &
+         +cx_c *( f_s(i+3,j_l) - f_s(i-3,j_l) )   &
+         +dx_c *( f_s(i+4,j_l) - f_s(i-4,j_l) ))
+ 
+  end subroutine deriv_x_1sync
+
+  ! this version uses a 128x32 shared memory tile, 
+  ! still with 128*sPencils threads
+
+  attributes(global) subroutine deriv_x_lPencils(f, df)
+    implicit none
+
+    real(fp_kind), intent(in) :: f(mx,my,mz)
+    real(fp_kind), intent(out) :: df(mx,my,mz)
+
+    real(fp_kind), shared :: f_s(-3:mx+4,lPencils)
+
+    integer :: i,j,k,j_l,jBase
+
+    i = threadIdx%x
+    jBase = (blockIdx%x-1)*lPencils
+    k = blockIdx%y
+
+    do j_l = threadIdx%y, lPencils, blockDim%y
+       j = jBase + j_l
+       f_s(i,j_l) = f(i,j,k)
+    enddo
+
+    ! fill in periodic images in shared memory array 
+
+    call syncthreads()
+
+    if (i <= 4) then
+       do j_l = threadIdx%y, lPencils, blockDim%y
+          f_s(i-4, j_l) = f_s(mx+i-5,j_l) 
+          f_s(mx+i,j_l) = f_s(i+1,   j_l)   
+       end do
+    endif
+
+    call syncthreads()
+
+    do j_l = threadIdx%y, lPencils, blockDim%y
+       j = jBase + j_l
+       df(i,j,k) = &
+            (ax_c *( f_s(i+1,j_l) - f_s(i-1,j_l) )   &
+            +bx_c *( f_s(i+2,j_l) - f_s(i-2,j_l) )   &
+            +cx_c *( f_s(i+3,j_l) - f_s(i-3,j_l) )   &
+            +dx_c *( f_s(i+4,j_l) - f_s(i-4,j_l) ))
+    enddo
+ 
+  end subroutine deriv_x_lPencils
+
+  ! -------------
+  ! y derivatives
+  ! -------------
+
+  attributes(global) subroutine deriv_y(f, df)
+    implicit none
+
+    real(fp_kind), intent(in) :: f(mx,my,mz)
+    real(fp_kind), intent(out) :: df(mx,my,mz)
+
+    real(fp_kind), shared :: f_s(sPencils,-3:my+4)
+
+    integer :: i,i_l,j,k
+
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    i_l = threadIdx%x
+    j = threadIdx%y
+    k = blockIdx%y
+
+    f_s(i_l,j) = f(i,j,k)
+
+    call syncthreads()
+
+    if (j <= 4) then
+       f_s(i_l,j-4) = f_s(i_l,my+j-5) 
+       f_s(i_l,my+j) = f_s(i_l,j+1)   
+    endif
+
+    call syncthreads()
+
+    df(i,j,k) = &
+         (ay_c *( f_s(i_l,j+1) - f_s(i_l,j-1) )   &
+         +by_c *( f_s(i_l,j+2) - f_s(i_l,j-2) )   &
+         +cy_c *( f_s(i_l,j+3) - f_s(i_l,j-3) )   &
+         +dy_c *( f_s(i_l,j+4) - f_s(i_l,j-4) )) 
+
+  end subroutine deriv_y
+
+  ! y derivative using a tile of 32x128
+  ! launch with thread block of 32x8
+
+  attributes(global) subroutine deriv_y_lPencils(f, df)
+    implicit none
+
+    real(fp_kind), intent(in) :: f(mx,my,mz)
+    real(fp_kind), intent(out) :: df(mx,my,mz)
+
+    real(fp_kind), shared :: f_s(lPencils,-3:my+4)
+
+    integer :: i,j,k,i_l
+
+    i_l = threadIdx%x
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    k = blockIdx%y
+    
+    do j = threadIdx%y, my, blockDim%y
+       f_s(i_l,j) = f(i,j,k)
+    enddo
+    
+    call syncthreads()
+
+    j = threadIdx%y
+    if (j <= 4) then
+       f_s(i_l,j-4) = f_s(i_l,my+j-5) 
+       f_s(i_l,my+j) = f_s(i_l,j+1)   
+    endif
+
+    call syncthreads()
+
+    do j = threadIdx%y, my, blockDim%y
+       df(i,j,k) = &
+            (ay_c *( f_s(i_l,j+1) - f_s(i_l,j-1) )   &
+            +by_c *( f_s(i_l,j+2) - f_s(i_l,j-2) )   &
+            +cy_c *( f_s(i_l,j+3) - f_s(i_l,j-3) )   &
+            +dy_c *( f_s(i_l,j+4) - f_s(i_l,j-4) )) 
+    enddo
+
+  end subroutine deriv_y_lPencils
+
+  ! ------------
+  ! z derivative
+  ! ------------
+
+  attributes(global) subroutine deriv_z(f, df)
+    implicit none
+
+    real(fp_kind), intent(in) :: f(mx,my,mz)
+    real(fp_kind), intent(out) :: df(mx,my,mz)
+
+    real(fp_kind), shared :: f_s(sPencils,-3:mz+4)
+
+    integer :: i,i_l,j,k
+
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    i_l = threadIdx%x
+    j = blockIdx%y
+    k = threadIdx%y
+
+    f_s(i_l,k) = f(i,j,k)
+
+    call syncthreads()
+
+    if (k <= 4) then
+       f_s(i_l,k-4) = f_s(i_l,mz+k-5) 
+       f_s(i_l,mz+k) = f_s(i_l,k+1)   
+    endif
+
+    call syncthreads()
+
+    df(i,j,k) = &
+         (az_c *( f_s(i_l,k+1) - f_s(i_l,k-1) )   &
+         +bz_c *( f_s(i_l,k+2) - f_s(i_l,k-2) )   &
+         +cz_c *( f_s(i_l,k+3) - f_s(i_l,k-3) )   &
+         +dz_c *( f_s(i_l,k+4) - f_s(i_l,k-4) ))
+ 
+  end subroutine deriv_z
+
+
+  attributes(global) subroutine deriv_z_lPencils(f, df)
+    implicit none
+
+    real(fp_kind), intent(in) :: f(mx,my,mz)
+    real(fp_kind), intent(out) :: df(mx,my,mz)
+
+    real(fp_kind), shared :: f_s(lPencils,-3:mz+4)
+
+    integer :: i,i_l,j,k
+
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    i_l = threadIdx%x
+    j = blockIdx%y
+
+    do k = threadIdx%y, mz, blockDim%y
+       f_s(i_l,k) = f(i,j,k)
+    enddo
+
+    call syncthreads()
+
+    k = threadIdx%y
+    if (k <= 4) then
+       f_s(i_l,k-4) = f_s(i_l,mz+k-5) 
+       f_s(i_l,mz+k) = f_s(i_l,k+1)   
+    endif
+
+    call syncthreads()
+
+    do k = threadIdx%y, mz, blockDim%y
+       df(i,j,k) = &
+            (az_c *( f_s(i_l,k+1) - f_s(i_l,k-1) )   &
+            +bz_c *( f_s(i_l,k+2) - f_s(i_l,k-2) )   &
+            +cz_c *( f_s(i_l,k+3) - f_s(i_l,k-3) )   &
+            +dz_c *( f_s(i_l,k+4) - f_s(i_l,k-4) ))
+    enddo
+  end subroutine deriv_z_lPencils
+
+end module derivative_m

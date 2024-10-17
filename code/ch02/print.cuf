@@ -1,0 +1,39 @@
+module simpleOps_m
+contains
+  attributes(global) subroutine increment(a, b, n)
+    implicit none
+    integer, intent(inout) :: a(*)
+    integer, value :: b, n
+    integer :: i
+
+    i = blockDim%x*(blockIdx%x-1) + threadIdx%x
+    if (i <= n) a(i) = a(i)+b
+    if (i > 30 .and. i < 34) print *, 'i, a(i):', i, a(i)
+  end subroutine increment
+end module simpleOps_m
+
+
+program main
+  use cudafor
+  use simpleOps_m
+  implicit none
+  integer, parameter :: n = 1024*1024
+  integer, allocatable :: a(:)
+  integer, device, allocatable :: a_d(:)
+  integer :: b, tPB = 256
+
+  allocate(a(n), a_d(n))
+  a = 1
+  b = 3
+
+  a_d = a
+  call increment<<<(n-1)/tPB+1,tPB>>>(a_d, b, n)
+  a = a_d
+
+  if (any(a /= 4)) then
+     print *, '**** Program Failed ****'
+  else
+     print *, 'Program Passed'
+  endif
+  deallocate(a, a_d)
+end program main

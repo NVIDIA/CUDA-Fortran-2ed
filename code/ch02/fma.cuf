@@ -1,0 +1,7 @@
+module m
+contains
+  attributes(global) subroutine s(a, b, c)
+    real :: a, b, c
+    a = a+b*c
+  end subroutine s
+end module m

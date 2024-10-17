@@ -1,0 +1,73 @@
+module m
+  integer, parameter :: nx = 64
+  integer, parameter :: readRemoteSharedMemory = 1
+  integer, parameter :: writeRemoteSharedMemory = 2  
+contains
+  attributes(global) cluster_dims(2,1,1) subroutine swap(a, b, mode)
+    use cooperative_groups
+    implicit none
+    integer, device :: a(nx), b(nx)
+    integer, value :: mode
+    
+    type(cluster_group) :: cluster
+    integer, shared :: s(nx/2)
+    integer, shared :: ds(nx/2); pointer(dsPtr, ds)
+    integer :: i, tibIdx, tibDim, ticIdx, bicIdx
+    
+    cluster = this_cluster()   
+    
+    tibIdx = threadIdx%x   ! thread index in block
+    tibDim = blockDim%x    ! number of threads in block
+    bicIdx = cluster%rank  ! block index in cluster
+    ticIdx = (bicIdx-1)*tibDim + tibIdx  ! thread index in cluster
+ 
+    s(tibIdx) = 0
+    call syncthreads(cluster)     
+
+    ! get pointer to other block's shared memory
+    if (cluster%rank == 1) then
+       dsPtr = cluster_map_shared_rank(s, 2)
+    else
+       dsPtr = cluster_map_shared_rank(s, 1)
+    end if
+
+    if (mode == readRemoteSharedMemory) then       
+       s(tibIdx) = a(ticIdx)  ! write to local shared memory
+       call syncthreads(cluster)     
+       b(ticIdx) = ds(tibIdx) ! read from remote shared memory
+       call syncthreads(cluster) ! ensure remote read finishes before exit
+    else ! writeRemoteSharedMemory
+       ds(tibIdx) = a(ticIdx) ! write to remote shared memory        
+       call syncthreads(cluster)
+       b(ticIdx) = s(tibIdx)  ! read from local shared memory
+    end if
+  end subroutine swap
+end module m
+
+program main
+  use m
+  use cudafor
+  implicit none
+  integer :: a(nx), b(nx), gold(nx)
+  integer, device :: a_d(nx), b_d(nx)
+  integer :: i
+
+  do i = 1, nx
+     a(i) = i
+  enddo
+
+  gold(1:nx/2) = a(nx/2+1:nx)
+  gold(nx/2+1:nx) = a(1:nx/2)
+  
+  a_d = a
+  b_d = -1
+
+  call swap<<<2,nx/2>>>(a_d, b_d, readRemoteSharedMemory)
+  b = b_d
+  print *, 'Remote read maxval(abs(gold-b)):  ', maxval(abs(gold-b))
+  
+  b_d = -1
+  call swap<<<2,nx/2>>>(a_d, b_d, writeRemoteSharedMemory)
+  b = b_d
+  print *, 'Remote write maxval(abs(gold-b)): ', maxval(abs(gold-b))
+end program main

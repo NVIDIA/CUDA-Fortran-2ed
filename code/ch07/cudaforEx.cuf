@@ -1,0 +1,29 @@
+module cudaforEx
+  use cudafor
+  
+contains
+
+  function cudaforGetDataType(x) result(res)
+    use cudafor
+    !dir$ ignore_tkr (rd) x
+    class(*) :: x
+    integer :: res
+    select type (x)
+    type is (real(2))
+       res = CUDA_R_16F
+    type is (real(4))
+       res = CUDA_R_32F
+    type is (real(8))
+       res = CUDA_R_64F
+    type is (integer(4))
+       res = CUDA_R_32I
+    type is (complex(4))
+       res = CUDA_C_32F
+    type is (complex(8))
+       res = CUDA_C_64F
+    class default
+       res = -1
+    end select
+  end function cudaforGetDataType
+
+end module cudaforEx

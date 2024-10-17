@@ -1,0 +1,55 @@
+module m
+contains
+  attributes(global) subroutine increment(a, b)
+    implicit none
+    integer, intent(inout) :: a(*)
+    integer, shared :: s(*)
+    integer, value :: b
+    integer :: i, il
+
+    il = threadIdx%x
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    s(il) = a(i)
+    call syncthreads()
+    a(i) = s(il)+b
+  end subroutine increment
+end module m
+
+
+program maxSharedMemory
+  use cudafor
+  use m
+  implicit none
+
+  integer, parameter :: n = 1024*1024
+  integer :: a(n)
+  integer, device :: a_d(n)
+  type(cudaFuncAttributes) :: attr
+  type(cudaDeviceProp) :: prop
+  integer :: istat, smBytes
+
+  istat = cudaGetDeviceProperties(prop, 0)
+  print "(/,'Device Name: ',a)", trim(prop%name)
+  print "('Compute Capability: ',i0,'.',i0)", &
+       prop%major, prop%minor
+  
+  print "(/,'sharedMemPerBlock: ', i0)", prop%sharedMemPerBlock
+  print "('sharedMemPerBlockOptIn: ', i0)", &
+       prop%sharedMemPerBlockOptIn
+  print "('sharedMemPerMultiprocessor: ', i0)", &
+       prop%sharedMemPerMultiprocessor
+
+  smBytes = prop%sharedMemPerBlockOptIn
+  istat = cudaFuncSetAttribute(increment, &
+       cudaFuncAttributeMaxDynamicSharedMemorySize, &
+       smBytes)
+  
+  a_d = 1
+  call increment<<<n/32, 32, smBytes>>>(a_d, 2)
+  a = a_d
+  if (all(a==3)) then
+     print "(/,'Passed')"
+  else
+     print "(/,'*** Failed ***')"
+  end if
+end program maxSharedMemory

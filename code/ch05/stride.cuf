@@ -1,0 +1,59 @@
+module m
+  use, intrinsic :: iso_fortran_env
+  integer, parameter :: fp_kind=real32
+contains
+  attributes(global) subroutine increment(a, stride)
+    implicit none
+    real(fp_kind) :: a(stride,*)
+    integer, value :: stride
+    integer :: i
+    i = blockDim%x*(blockIdx%x-1)+threadIdx%x
+    a(1,i) = a(1,i)+1
+  end subroutine increment
+end module m
+
+program stride
+  use cudafor
+  use m
+  
+  implicit none
+  
+  integer, parameter :: nMB = 128  ! transfer size in MB
+  integer, parameter :: n = nMB*1024*1024/fp_kind
+  integer, parameter :: blockSize = 256
+  real(fp_kind), device :: a_d(32,n)
+  type(cudaEvent) :: startEvent, stopEvent
+  type(cudaDeviceProp) :: prop
+  integer :: i, istat
+  real(4) :: time
+
+
+  istat = cudaGetDeviceProperties(prop, 0)
+  print "(/,'Device: ',a)", trim(prop%name)
+  print "('Transfer size (MB): ',i0)", nMB
+
+  if (kind(a_d) == real32) then
+     print "('Single Precision',/)"
+  else
+     print "('Double Precision',/)"
+  endif
+
+  istat = cudaEventCreate(startEvent)
+  istat = cudaEventCreate(stopEvent)
+ 
+  print *, 'Stride, Bandwidth (GB/s):'
+  do i = 1, 32
+     a_d = 0.0
+     istat = cudaEventRecord(startEvent,0)
+     call increment<<<n/blockSize,blockSize>>>(a_d, i)
+     istat = cudaEventRecord(stopEvent,0)
+     istat = cudaEventSynchronize(stopEvent)
+     
+     istat = cudaEventElapsedTime(time, startEvent, &
+          stopEvent)
+     print *, i, 2*n*fp_kind/time*1.e-6
+  enddo
+ 
+  istat = cudaEventDestroy(startEvent)
+  istat = cudaEventDestroy(stopEvent) 
+end program stride

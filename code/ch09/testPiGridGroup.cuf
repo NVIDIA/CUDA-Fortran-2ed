@@ -1,0 +1,82 @@
+program testPiGridGroup
+  use pi_gridGroup_m
+  use precision_m
+  use curand
+  use cudafor
+  implicit none
+
+  integer, parameter :: blockSize = 256
+  real(fp_kind), allocatable:: data_h(:)
+  real(fp_kind), allocatable, device:: data_d(:)
+  real(fp_kind) :: pival
+
+  integer, device, allocatable :: partial_d(:)
+  type(curandGenerator):: gen
+  integer :: inside_gpu, inside_cpu, i, istat
+  integer :: twoN, N, nBlocks
+  integer(8) :: seed
+  
+  N=200000
+  twoN=N*2
+  
+  allocate(data_h(twoN), data_d(twoN))
+
+  if (fp_kind == singlePrecision) then
+     write(*,"('Compute pi in single precision')")
+  else
+     write(*,"('Compute pi in double precision')")
+  end if
+  
+  ! Create pseudonumber generator
+  istat = curandCreateGenerator(gen, CURAND_RNG_PSEUDO_DEFAULT)
+  
+  ! Set seed
+  seed=1234
+  istat = curandSetPseudoRandomGeneratorSeed(gen, seed)
+  
+  ! Generate N floats or doubles on device
+  istat = curandGenerate(gen, data_d, twoN)
+
+  data_h = data_d
+
+  ! determine the # of blocks to launch for grid_global kernel
+  block
+    type(cudaDeviceProp) :: prop
+    istat = cudaGetDeviceProperties(prop, 0)
+    istat = cudaOccupancyMaxActiveBlocksPerMultiprocessor( &
+         nBlocks, pi_gg, blockSize, 0) 
+    nBlocks = nBlocks * prop%multiProcessorCount
+  end block
+
+  ! allocate the partial() array
+  allocate(partial_d(nBlocks))
+
+  ! Perform the test on GPU using grid_global kernel
+  inside_gpu=0
+  call pi_gg<<<nBlocks, blockSize>>>(data_d, partial_d, twoN)
+  inside_gpu = partial_d(1)
+  
+  ! Perform the test on CPU 
+  inside_cpu=0
+  do i=1,N
+     if( (data_h(i)**2 + data_h(i+N)**2) <= 1._fp_kind ) & 
+          inside_cpu=inside_cpu+1
+  end do  
+
+  ! Check the results
+  if (inside_cpu .ne. inside_gpu) &
+       write(*,*) "Mismatch between CPU/GPU"
+
+  ! Print the value of pi and the error
+  pival= 4._fp_kind*real(inside_gpu,fp_kind)/real(N,fp_kind)
+  write(*,"(t3,a,i10,a,f10.8,a,e11.4)") "Samples=", N, &
+       "  Pi=", pival, &
+       "  Error=", abs(pival-2.0_fp_kind*asin(1.0_fp_kind))
+  
+  ! Deallocate data on CPU and GPU
+  deallocate(data_h, data_d, partial_d)
+  
+  ! Destroy the generator
+  istat = curandDestroyGenerator(gen)
+  
+end program testPiGridGroup

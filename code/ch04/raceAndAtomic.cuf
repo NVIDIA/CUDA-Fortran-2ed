@@ -1,0 +1,25 @@
+module m
+contains
+  attributes(global) subroutine s1(raceCount, atomicCount)
+    implicit none
+    integer :: raceCount, atomicCount
+    integer :: tmp    
+    raceCount = raceCount + 1
+    tmp = atomicAdd(atomicCount, 1)
+  end subroutine s1
+end module m
+
+program raceAndAtomic
+  use m
+  implicit none
+  integer, parameter :: nBlocks = 256, nThreads = 256
+  integer, device :: raceCount_d, atomicCount_d
+  integer :: raceCount, atomicCount
+
+  raceCount_d = 0
+  atomicCount_d = 0
+  call s1<<<nBlocks, nThreads>>>(raceCount_d, atomicCount_d)
+  raceCount = raceCount_d
+  atomicCount = atomicCount_d
+  print *, nBlocks*nThreads, raceCount, atomicCount 
+end program raceAndAtomic

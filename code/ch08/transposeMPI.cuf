@@ -1,0 +1,228 @@
+module transpose_m
+  integer, parameter :: blockRows = 32, blockCols = 8
+  integer, parameter :: nTile = blockRows
+contains
+  
+  attributes(global) subroutine cudaTranspose( &
+       matOut, ldOut, matIn, ldIn)
+    implicit none
+    real, intent(out) :: matOut(ldOut, *)
+    real, intent(in) :: matIn(ldIn, *)
+    integer, value, intent(in) :: ldOut, ldIn
+    real, shared :: tile(nTile+1, nTile)
+    integer :: row, col, j
+
+    row = (blockIdx%x-1)*nTile + threadIdx%x
+    col = (blockIdx%y-1)*nTile + threadIdx%y
+    
+    do j = 0, nTile-1, blockCols
+       tile(threadIdx%x, threadIdx%y+j) = matIn(row, col+j)
+    end do
+    
+    call syncthreads()
+    
+    row = (blockIdx%y-1)*nTile + threadIdx%x
+    col = (blockIdx%x-1)*nTile + threadIdx%y
+    
+    do j = 0, nTile-1, blockCols
+       matOut(row,col+j) = tile(threadIdx%y+j, threadIdx%x)          
+    end do
+  end subroutine cudaTranspose
+
+end module transpose_m
+
+!
+! Main code
+!
+
+program transposeMPI
+  use cudafor
+  use mpi
+  use mpiDeviceUtil
+  use transpose_m 
+
+  implicit none
+
+  ! global array size
+  integer, parameter :: nRows = 2048, nCols = 2048
+
+  ! host arrays
+  real :: matIn(nRows, nCols), matOut(nCols, nRows), gold(nCols, nRows)
+  real, pinned, allocatable :: sTile(:,:), rTile(:,:)
+
+  ! CUDA vars and device arrays
+  integer :: deviceID
+  type (dim3) :: dimGrid, dimBlock
+  real, device, allocatable :: &
+       matIn_d(:,:), matOut_d(:,:), rTile_d(:,:)
+
+  ! MPI stuff
+  integer :: mpiTileRows, mpiTileCols
+  integer :: myrank, nprocs, tag, ierr
+  integer :: nstages, stage, sRank, rRank
+  integer :: status(MPI_STATUS_SIZE)
+  real(8) :: timeStart, timeStop
+
+  integer :: i, j, jl, jg, p
+  integer :: xOffset, yOffset
+
+  ! MPI initialization
+
+  call MPI_Init(ierr)
+  call MPI_Comm_rank(MPI_COMM_WORLD, myrank, ierr)
+  call MPI_Comm_size(MPI_COMM_WORLD, nProcs, ierr)
+
+  ! get and set device
+
+  call assignDevice(deviceID)
+
+  ! check parameters and calculate execution configuration
+
+  if (mod(nRows,nProcs) == 0 .and. mod(nCols,nProcs) == 0) then
+     mpiTileRows = nRows/nProcs
+     mpiTileCols = nCols/nProcs
+  else
+     write(*,*) 'nRows, nCols must be integral multiples of nProcs'
+     call MPI_Finalize(ierr)
+     stop
+  endif
+
+  if (mod(mpiTileRows, nTile) /= 0 .or. &
+       mod(mpiTileCols, nTile) /= 0) then
+     write(*,*) 'mpiTileRows and mpiTileCols must be ', &
+          'integral multiples of nTile'
+     call MPI_Finalize(ierr)
+     stop
+  end if
+  
+  if (mod(nTile, blockCols) /= 0) then
+     write(*,*) 'nTile must be a multiple of blockCols'
+     call MPI_Finalize(ierr)
+     stop
+  end if
+
+  dimGrid = dim3(mpiTileRows/nTile, mpiTileCols/nTile, 1)
+  dimBlock = dim3(nTile, blockCols, 1)
+
+  ! write parameters
+
+  if (myrank == 0) then
+     print "(/,'Array size: ', i0,'x',i0,/)", nRows, nCols
+     
+     print "('CUDA block size: ', i0,'x',i0, &
+          ',  CUDA tile size: ', i0,'x',i0)", &
+          nTile, blockCols, nTile, nTile
+     print "('dimGrid: ', i0,'x',i0,'x',i0, &
+          ',   dimBlock: ', i0,'x',i0,'x',i0,/)", &
+          dimGrid%x, dimGrid%y, dimGrid%z, &
+          dimBlock%x, dimBlock%y, dimBlock%z
+     
+     print "('nprocs: ', i0, ',  Local input array size: ', &
+          i0,'x',i0)", nprocs, nRows, mpiTileCols
+     print "('mpiTile: ', i0,'x',i0,/)", &
+          mpiTileRows, mpiTileCols
+  endif
+
+  ! initialize data
+
+  ! host - each process has entire array on host
+
+  do p = 0, nProcs-1
+     do jl = 1, mpiTileCols
+        jg = p*mpiTileCols + jl
+        do i = 1, nRows
+           matIn(i,jg) = i+(jg-1)*nRows 
+        enddo
+     enddo
+  enddo
+
+  gold = transpose(matIn)
+
+  ! device - each process has 
+  ! nRows*mpiTileCols = nCols*mpiTileRows  elements
+
+  allocate(matIn_d(nRows, mpiTileCols), &
+       sTile(mpiTileRows,mpiTileCols), &
+       rTile(mpiTileRows, mpiTileCols), &
+       rTile_d(mpiTileRows, mpiTileCols), &
+       matOut_d(nCols, mpiTileRows))
+  
+  yOffset = myrank*mpiTileCols
+  matIn_d(1:nRows,1:mpiTileCols) = &
+       matIn(1:nRows,yOffset+1:yOffset+mpiTileCols)
+  
+  matOut_d = -1.0
+  
+  ! ---------
+  ! transpose
+  ! ---------
+
+  do p = 1, 2  ! 2nd iteration time reported
+
+     call MPI_Barrier(MPI_COMM_WORLD, ierr)
+     timeStart = MPI_Wtime()
+  
+     ! 0th stage - local transpose
+     
+     call cudaTranspose<<<dimGrid, dimBlock>>> &
+          (matOut_d(myrank*mpiTileCols+1,1), nCols, &
+          matIn_d(myrank*mpiTileRows+1,1), nRows)
+     
+     ! other stages that involve MPI transfers
+     
+     do stage = 1, nProcs-1
+        ! sRank = the rank to which myrank sends data
+        ! rRank = the rank from which myrank receives data
+        sRank = modulo(myrank-stage, nProcs) 
+        rRank = modulo(myrank+stage, nProcs) 
+        
+        call MPI_Barrier(MPI_COMM_WORLD, ierr)
+        
+        ! D2H transfer - pack into contiguous host array
+        ierr = cudaMemcpy2D(sTile, mpiTileRows, &
+             matIn_d(sRank*mpiTileRows+1,1), nRows, &
+             mpiTileRows, mpiTileCols)
+        
+        ! MPI transfer
+        call MPI_Sendrecv(sTile, mpiTileRows*mpiTileCols, &
+             MPI_REAL, sRank, myrank, &
+             rTile, mpiTileRows*mpiTileCols, MPI_REAL, &
+             rRank, rRank, MPI_COMM_WORLD, status, ierr)
+        
+        ! H2D transfer
+        rTile_d = rTile
+        
+        ! do transpose from receive tile into final array 
+        call cudaTranspose<<<dimGrid, dimBlock>>> &
+             (matOut_d(rRank*mpiTileCols+1,1), nCols, &
+             rTile_d, mpiTileRows)
+        
+     end do ! stage
+     
+     call MPI_Barrier(MPI_COMM_WORLD, ierr)
+     timeStop = MPI_Wtime()
+
+  enddo
+  
+  ! check results
+
+  matOut = matOut_d
+
+  xOffset = myrank*mpiTileRows
+  if (all(matOut(1:nCols,1:mpiTileRows) == &
+       gold(1:nCols, xOffset+1:xOffset+mpiTileRows))) then
+     if (myrank == 0) then
+        write(*,"('Bandwidth (GB/s): ', f7.2,/)") &
+             2.*(nRows*nCols*4)/(1.0e+9*(timeStop-timeStart)) 
+     endif
+  else
+     write(*,"('[',i0,']', *** Failed ***,/)") myrank
+  endif
+
+  ! cleanup
+
+  deallocate(matIn_d, matOut_d, sTile, rTile, rTile_d)
+
+  call MPI_Finalize(ierr)
+
+end program transposeMPI

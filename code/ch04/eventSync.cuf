@@ -1,0 +1,36 @@
+program eventSync
+  use cudafor
+  implicit none
+  integer, parameter :: n=100000
+  real, device :: a_d(n), b_d(n), c_d(n)
+  integer(kind=cuda_stream_kind) :: stream1, stream2
+  type(cudaEvent) :: event1
+  integer :: istat, i, j
+
+  istat = cudaStreamCreate(stream1)
+  istat = cudaStreamCreate(stream2)
+  istat = cudaEventCreate(event1)
+  
+  !$cuf kernel do <<<1,1,stream=stream1>>>
+  do i = 1, n
+     a_d(i) = i
+  enddo
+
+  istat = cudaEventRecord(event1, stream1)
+  
+  !$cuf kernel do <<<1,1,stream=stream1>>>
+  do i = 1, n
+     b_d(i) = a_d(i) + 1.0
+  enddo
+
+  istat = cudaEventSynchronize(event1)
+
+  !$cuf kernel do <<<1,1,stream=stream2>>>
+  do i = 1, n
+     c_d(i) = a_d(i) + 2.0
+  enddo
+
+  istat = cudaStreamDestroy(stream1)
+  istat = cudaStreamDestroy(stream2)
+  istat = cudaEventDestroy(event1)
+end program eventSync

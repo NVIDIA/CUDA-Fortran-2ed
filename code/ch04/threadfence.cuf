@@ -1,0 +1,81 @@
+module m
+contains
+  attributes(global) subroutine s1(a, b, n, useThreadfence)
+    implicit none
+    real :: a(n), b(n)
+    integer, value :: n
+    logical, value :: useThreadfence
+    integer :: tid, i
+
+    tid = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    
+    do i = tid, n, blockDim%x*gridDim%x
+       a(i) = i
+       if (useThreadfence) call threadfence()
+       b(i) = i
+    enddo
+  end subroutine s1
+
+  attributes(global) subroutine s2(a, b, n, flag, useThreadfence)
+    implicit none
+    real :: a(n), b(n), aval, bval
+    integer, value :: n
+    integer :: flag
+    logical, value :: useThreadfence
+    integer :: tid, i, tmp
+
+    tid = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    do i = tid, n, blockDim%x*gridDim%x
+       bval = b(i)
+       if (useThreadfence) call threadfence()       
+       aval = a(i)
+       if (aval == 0 .and. bval == i) tmp = atomicExch(flag, 1)
+    enddo
+  end subroutine s2
+
+end module m
+
+program threadfence
+  use cudafor
+  use m
+  implicit none
+  integer, parameter :: n=10000*1024
+  integer, parameter :: niter = 2000
+  real, device :: a_d(n), b_d(n)
+  integer, device :: flag_d
+  integer :: flag
+  logical :: useThreadfence
+  integer(cuda_stream_kind) :: stream1, stream2
+  integer :: istat, i, j, icount
+
+  istat = cudaStreamCreate(stream1)
+  istat = cudaStreamCreate(stream2)
+
+  do j = 1, 2
+     if (j == 1) then
+        useThreadfence = .false.
+        print *, 'Runs without threadfence(): '
+     else
+        useThreadfence = .true.
+        print *, 'Runs with threadfence(): '
+     endif
+
+     icount = 0
+     do i = 1, niter
+        a_d = 0.0
+        b_d = 0.0
+        flag_d = 0
+
+        call s1<<<10,512,0,stream1>>>(a_d, b_d, n, useThreadfence)
+        call s2<<<10,512,0,stream2>>>(a_d, b_d, n, flag_d, useThreadfence)
+        flag = flag_d
+        if (flag == 1) icount = icount+1
+     enddo
+     print "(a, i0,'/',i0)", &
+          '  iterations where out-of-order access observed: ', &
+          icount, niter
+  end do
+
+  istat = cudaStreamDestroy(stream1)
+  istat = cudaStreamDestroy(stream2)
+end program threadfence

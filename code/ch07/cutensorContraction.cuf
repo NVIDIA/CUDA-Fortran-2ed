@@ -1,0 +1,136 @@
+program main
+  use cudafor
+  use cutensor_v2
+  implicit none
+  integer, parameter :: m=3200, n=3200, k=3200
+  real(8) :: a(m,k), b(k,n), c(m,n), cref(m,n)
+  real(8), device :: a_d(m,k), b_d(k,n), c_d(m,n)
+  real(8) :: alpha = 1.0, beta = 0.0
+  
+  type(cudaDeviceProp) :: prop
+
+  type(cutensorHandle) :: handle
+  type(cutensorTensorDescriptor) :: Adesc, Bdesc, Cdesc
+  type(cutensorOperationDescriptor) :: opDesc
+  type(cutensorPlan) :: plan
+  type(cutensorPlanPreference) :: pref
+  integer(4) :: aMode(2), bMode(2), cMode(2)
+  
+  integer :: istat
+  type(cutensorStatus) :: ctStat
+
+  istat = cudaGetDeviceProperties(prop, 0)
+  if (istat /= cudaSuccess) &
+       print *, cudaGetErrorString(istat)
+  print "(' Device : ', a)", trim(prop%name)
+  print "(' m = ', i0, ', n = ', i0, ', k = ', i0)", m , n , k
+
+  call random_number(a); call random_number(b)
+  a_d = a; b_d = b; c_d = 0.0
+
+  ! host reference
+  cref = matmul(a,b)
+
+  ! Initialize cutensor library
+  ctStat = cutensorCreate(handle)
+  if (ctStat /= CUTENSOR_STATUS_SUCCESS) &
+       print *, cutensorGetErrorString(ctStat)
+
+  ! Create tensor descriptors
+  block
+    integer(8) :: extent(2), stride(2)
+    integer(4) :: nModes
+    integer(4) :: ialign
+
+    ! A
+    
+    nModes=2
+    extent = shape(a)
+    stride = [1, m]
+    Amode = [ichar('m'), ichar('k')]
+    ialign = 128
+    
+    ctStat = cutensorCreateTensorDescriptor(handle, Adesc, &
+         nModes, extent, stride, CUTENSOR_R_64F, ialign)
+
+    ! B
+    
+    nModes=2
+    extent = shape(b)
+    stride = [1, k]
+    Bmode = [ichar('k'), ichar('n')]
+    ialign = 128
+    
+    ctStat = cutensorCreateTensorDescriptor(handle, Bdesc, &
+         nModes, extent, stride, CUTENSOR_R_64F, ialign)
+
+    ! C
+
+    nModes=2
+    extent = shape(c)
+    stride = [1, m]
+    Cmode = [ichar('m'), ichar('n')]
+    ialign = 128
+    
+    ctStat = cutensorCreateTensorDescriptor(handle, Cdesc, &
+         nModes, extent, stride, CUTENSOR_R_64F, ialign)
+  end block
+    
+  ctStat = cutensorCreateContraction(handle, opDesc, &
+       Adesc, Amode, CUTENSOR_OP_IDENTITY, &
+       Bdesc, Bmode, CUTENSOR_OP_IDENTITY, &
+       Cdesc, Cmode, CUTENSOR_OP_IDENTITY, &
+       Cdesc, Cmode, CUTENSOR_COMPUTE_DESC_64F)
+  
+  ctStat = cutensorCreatePlanPreference(&
+       handle, pref, CUTENSOR_ALGO_DEFAULT, CUTENSOR_JIT_MODE_NONE)
+  
+  ! create work buffer
+  block
+    integer(8) :: worksize
+    integer(1), device, allocatable :: workspace_d(:)
+    
+    ctStat = cutensorEstimateWorkspaceSize(handle, opDesc, pref, &
+         CUTENSOR_WORKSPACE_DEFAULT, worksize)
+    print *,"Estimated workspace size (B): ", worksize
+
+    ctStat = cutensorCreatePlan(handle, plan, opDesc, pref, worksize)
+    allocate(workspace_d(worksize))
+
+    ! now do contraction
+    block
+      type(cudaEvent) :: startEvent, stopEvent
+      real(4) :: time
+
+      istat = cudaEventCreate(startEvent)
+      istat = cudaEventCreate(stopEvent)
+
+      istat = cudaDeviceSynchronize()
+      istat = cudaEventRecord(startEvent, 0)
+      
+      ctStat = cutensorContract(handle, plan, alpha, a_d, b_d, &
+           beta, c_d, c_d, workspace_d, worksize, 0)
+
+      istat = cudaEventRecord(stopEvent, 0)
+      istat = cudaEventSynchronize(stopEvent)
+      istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+      istat = cudaEventDestroy(startEvent)
+      istat = cudaEventDestroy(stopEvent)
+      
+      c = c_d
+      print *, 'maxval(abs(c-cref))', maxval(abs(c-cref))
+      print *, 'TFLOPS: ', 2.*k*m*n/(time/1000.)/1.0E+12
+    end block      
+    deallocate(workspace_d)
+  end block
+
+  ! cleanup
+
+  ctStat = cutensorDestroy(handle)
+  ctStat = cutensorDestroyPlan(plan)
+  ctStat = cutensorDestroyOperationDescriptor(opDesc)
+  ctStat = cutensorDestroyTensorDescriptor(Adesc)  
+  ctStat = cutensorDestroyTensorDescriptor(Bdesc)
+  ctStat = cutensorDestroyTensorDescriptor(Cdesc)
+
+end program main

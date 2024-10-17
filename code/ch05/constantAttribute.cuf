@@ -1,0 +1,25 @@
+module m
+  integer, constant :: b
+contains
+  attributes(global) subroutine increment(a)
+    implicit none
+    integer, intent(inout) :: a(*)
+    integer :: i
+
+    i = threadIdx%x
+    a(i) = a(i)+b
+
+  end subroutine increment
+end module m
+
+
+program constantAttribute
+  use cudafor
+  use m
+  implicit none
+  type(cudaFuncAttributes) :: attr
+  integer :: istat
+
+  istat = cudaFuncGetAttributes(attr, increment)
+  print "('Constant memory used (bytes): ', i0)", attr%constSizeBytes
+end program constantAttribute

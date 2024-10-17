@@ -1,0 +1,60 @@
+program fft_test_r2c
+  use cudafor
+  use precision_m
+  use cufft
+  implicit none
+  integer, allocatable :: kx(:)
+  real(fp_kind), allocatable :: rinput(:)
+  real(fp_kind), allocatable, device :: rinput_d(:)
+  complex(fp_kind), allocatable :: coutput(:)
+  
+  integer :: i,n,istat,plan
+  real(fp_kind) :: twopi=8._fp_kind*atan(1._fp_kind),h
+  
+  interface cufftExec
+     module procedure cufftExecR2C,cufftExecD2Z
+  end interface cufftExec
+  
+  n=16 
+  h=twopi/real(n,fp_kind)
+
+  ! allocate arrays on the host
+  allocate(rinput(n),coutput(n/2+1),kx(n/2+1))
+
+  ! allocate arrays on the device
+  allocate(rinput_d(n+2))
+
+  !initialize arrays on host
+  kx = [(i-1, i=1,n/2+1)]
+
+  do i=1,n
+     rinput(i)=(cos(2*real(i-1,fp_kind)*h)+ &
+          sin(3*real(i-1,fp_kind)*h))
+  end do
+
+  !copy arrays to device
+  rinput_d=rinput
+
+  ! Initialize the plan for real to complex transform
+  if (fp_kind == real32) istat=cufftPlan1D(plan,n,CUFFT_R2C,1)
+  if (fp_kind == real64) istat=cufftPlan1D(plan,n,CUFFT_D2Z,1)
+
+  ! Execute  Forward transform in place
+  istat=cufftExec(plan,rinput_d,rinput_d)
+
+  ! Copy results back to host
+  istat=cudaMemcpy(coutput,rinput_d,n/2+1,cudaMemcpyDeviceToHost)
+
+  print *," Transform from real array"
+  do i=1,n/2+1
+     write(*,'(i2,1x,i2,2(f8.4))') i,kx(i),coutput(i)/n
+  end do
+
+  !release memory on the host and on the device
+  deallocate (rinput,coutput,kx,rinput_d)
+
+  ! Destroy the plans
+  istat=cufftDestroy(plan)
+
+end program fft_test_r2c
+

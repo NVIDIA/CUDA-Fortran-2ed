@@ -1,0 +1,45 @@
+module pi_lock_m
+  integer, device::  lock=0
+contains
+  attributes(global) subroutine pi_lock(input, partial, twoN)
+    use precision_m
+    implicit none
+    real(fp_kind) :: input(twoN)
+    integer :: partial(*)
+    integer, value :: twoN
+
+    integer, shared :: p_s(*)
+    integer :: N, i, index, inext, interior
+
+    N = twoN/2
+
+    index=threadIdx%x+(BlockIdx%x-1)*BlockDim%x
+    
+    interior=0
+    do i=index, N, BlockDim%x*GridDim%x
+       if( (input(i)**2+input(i+N)**2) <= 1._fp_kind ) &
+            interior=interior+1
+    end do
+
+    ! Local reduction per block
+    index=threadIdx%x
+    
+    p_s(index)=interior
+    call syncthreads()
+    
+    inext=blockDim%x/2
+    do while ( inext >=1 )
+       if (index <= inext) p_s(index)=p_s(index)+p_s(index+inext)
+       inext = inext/2
+       call syncthreads()
+    end do
+    
+    if (index == 1) then
+       do while (atomiccas(lock,0,1) == 1)
+       end do
+       partial(1)=partial(1)+p_s(1)
+       call threadfence()
+       lock = 0
+    end if
+  end subroutine pi_lock
+end module pi_lock_m

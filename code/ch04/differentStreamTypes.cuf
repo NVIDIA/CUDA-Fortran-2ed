@@ -1,0 +1,37 @@
+program differentStreamTypes
+  use cudafor
+  implicit none
+  integer, parameter :: n=100000
+  real, device :: a_d(n), b_d(n)
+  real :: a(n)
+  integer(kind=cuda_stream_kind) :: stream1, stream2
+  integer :: istat, i
+
+  istat = cudaStreamCreate(stream1)
+  istat = cudaStreamCreateWithFlags(stream2, cudaStreamNonBlocking)
+  a = 1.0
+
+  !$cuf kernel do <<<1,1>>>
+  do i = 1, n
+     b_d(i) = i
+  enddo
+  a_d = a
+
+  !$cuf kernel do <<<1,1,stream=stream1>>>
+  do i = 1, n
+     b_d(i) = i
+  enddo
+  a_d = a
+
+  istat = cudaDeviceSynchronize()
+  
+  !$cuf kernel do <<<1,1,stream=stream2>>>
+  do i = 1, n
+     b_d(i) = i
+  enddo
+  a_d = a
+  
+  istat = cudaStreamDestroy(stream1)
+  istat = cudaStreamDestroy(stream2)
+
+end program differentStreamTypes

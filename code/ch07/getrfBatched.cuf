@@ -1,0 +1,62 @@
+program testgetrfBatched
+  use cudafor 
+  use cublas 
+  implicit none 
+
+  integer, parameter :: n=2, nbatch=3, lda=n
+  real :: a(n,n,nbatch) 
+  real, device :: a_d(n,n,nbatch)
+  type(c_devptr) :: devPtrA(nbatch) 
+  type(c_devptr), device :: devPtrA_d(nbatch) 
+  type(cublasHandle) :: h1 
+  integer  :: ipvt(n*nbatch), info(nbatch) 
+  integer, device  :: ipvt_d(n*nbatch), info_d(nbatch)
+  integer :: i, k, istat
+
+  ! intitialize arrays and transfer to device
+  do k = 1, nbatch
+     a(1,1,k) = 6.0*k
+     a(2,1,k) = 4.0*k
+     a(1,2,k) = 3.0*k
+     a(2,2,k) = 3.0*k
+  end do
+  a_d = a
+
+  print "(/,'Input:')"
+  do k = 1, nbatch
+     print "(2x,'Matrix: ', i0)", k
+     do i=1, n
+        print *, a(i,:,k)
+     enddo
+  enddo
+
+  ! build an array of pointers
+  do k = 1, nbatch
+     devPtrA(k) = c_devloc(a_d(1,1,k))
+  end do
+  devPtrA_d = devPtrA
+
+  ! create handle, call cublasSgetrfBatched, and destroy handle
+  istat = cublasCreate(h1)
+  if (istat /= CUBLAS_STATUS_SUCCESS) &
+       write(*,*) 'cublasCreate failed'
+  istat= cublasSgetrfBatched(h1, n, devPtrA_d, lda, &
+       ipvt_d, info_d, nbatch)
+  if (istat /= CUBLAS_STATUS_SUCCESS) &
+       write(*,*) 'cublasSgetrfBatched failed: ', istat
+  istat = cublasDestroy(h1)
+  if (istat /= CUBLAS_STATUS_SUCCESS) &
+       write(*,*) 'cublasDestroy failed'
+    
+  a = a_d
+
+  print "(/, 'LU Factorization:')"
+  do k = 1, nbatch
+     print "(2x,'Matrix: ', i0)", k
+     do i = 1, n
+        print *, a(i,:,k)
+     enddo
+  enddo
+  
+end program testgetrfBatched
+

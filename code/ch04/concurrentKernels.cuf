@@ -1,0 +1,33 @@
+program concurrentKernels
+  use cudafor
+  implicit none
+  integer, parameter :: n=100000
+  integer, parameter :: nStreams=6
+  real, device :: a_d(n,nStreams)
+  real :: a(n,nStreams)
+  integer(kind=cuda_stream_kind) :: streams(nStreams)
+  integer :: istat, i, j, flag
+
+  flag = cudaStreamDefault
+  do j = 1, nStreams
+     istat = cudaStreamCreateWithFlags(streams(j), flag)
+  enddo
+  streams(3) = 0
+  
+  do j = 1, nStreams
+     !$cuf kernel do <<<1,1,stream=streams(j)>>>
+     do i = 1, n
+        a_d(i,j) = i
+     enddo
+  enddo
+
+  if (flag == cudaStreamNonBlocking) &
+       istat = cudaDeviceSynchronize()
+  
+  a = a_d
+  
+  do j = 1, nStreams
+     istat = cudaStreamDestroy(streams(j))
+  enddo
+
+end program concurrentKernels

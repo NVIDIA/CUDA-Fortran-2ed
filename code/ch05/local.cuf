@@ -1,0 +1,56 @@
+module localmem
+  implicit none
+contains
+  attributes(global) subroutine k1(a)
+    integer :: a(*)
+    integer :: b(2), i
+    i = blockDim%x*(blockIdx%x-1) + threadIdx%x
+    b = 1
+    a(i) = b(2)
+  end subroutine k1
+
+  attributes(global) subroutine k2(a, j)
+    integer :: a(*)
+    integer, value :: j
+    integer :: b(2), i
+    i = blockDim%x*(blockIdx%x-1) + threadIdx%x
+    b = 1
+    a(i) = b(j)
+  end subroutine k2
+
+  attributes(global) subroutine k3(a, j)
+    integer :: a(*)
+    integer, value :: j
+    integer :: b(256), i
+    i = blockDim%x*(blockIdx%x-1) + threadIdx%x
+    b = 1    
+    a(i) = b(j)
+  end subroutine k3
+
+  attributes(global) subroutine k4(a, j)
+    integer :: a(*), j(*)
+    integer :: b(2), i
+    i = blockDim%x*(blockIdx%x-1) + threadIdx%x
+    b = 1
+    a(i) = b(j(i))
+  end subroutine k4
+end module localmem
+
+
+program localAttribute
+  use localmem
+  use cudafor
+  implicit none
+  type(cudaFuncAttributes) :: attr
+  integer :: istat
+
+  istat = cudaFuncGetAttributes(attr, k1)
+  print "('k1 local memory (bytes/thread): ', i0)", attr%localSizeBytes
+  istat = cudaFuncGetAttributes(attr, k2)
+  print "('k2 local memory (bytes/thread): ', i0)", attr%localSizeBytes
+  istat = cudaFuncGetAttributes(attr, k3)
+  print "('k3 local memory (bytes/thread): ', i0)", attr%localSizeBytes
+  istat = cudaFuncGetAttributes(attr, k4)
+  print "('k4 local memory (bytes/thread): ', i0)", attr%localSizeBytes
+end program localAttribute
+ 

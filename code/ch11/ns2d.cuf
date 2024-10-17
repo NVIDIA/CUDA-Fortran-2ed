@@ -1,0 +1,234 @@
+program ns2d
+  use cudafor
+  use cufft
+  use, intrinsic :: iso_fortran_env, only: real32, real64
+  implicit none
+#ifdef SINGLE
+  integer, parameter :: fp_kind = real32
+#define FFT_RC_TYPE CUFFT_R2C
+#define FFT_CR_TYPE CUFFT_C2R
+#define FFT_exec_R2C cufftExecR2C
+#define FFT_exec_C2R cufftExecC2R
+#else
+  integer, parameter :: fp_kind = real64
+#define FFT_RC_TYPE CUFFT_D2Z
+#define FFT_CR_TYPE CUFFT_Z2D
+#define FFT_exec_R2C cufftExecD2Z
+#define FFT_exec_C2R cufftExecZ2D
+#endif
+  
+  real(fp_kind), parameter :: pi = real(2.,fp_kind)*asin(1._fp_kind)
+  integer, parameter :: nns=4 !RK substeps
+  real(fp_kind), allocatable, device :: w(:,:),psi(:,:),w_old(:,:), &
+       w_xr(:,:), w_yr(:,:), v_xr(:,:), v_yr(:,:), &
+       r(:,:,:)
+  complex(fp_kind), allocatable, device :: wh(:,:), psi_h(:,:), &
+       w_x(:,:), w_y(:,:), &
+       v_x(:,:), v_y(:,:)
+  real(fp_kind), allocatable, managed :: x(:),y(:),k_x(:), k_y(:),k_x2(:),k_y2(:)
+  real(fp_kind), allocatable :: sol_host(:,:)
+  real(fp_kind) :: k_max, sigma, lap, hypervisc, norm, alpha(nns)
+  real(fp_kind) :: delta_t, dx, dy, k4, Tmax, Tprint, time, L
+  integer :: i, j, ns, N, Nh,  Nsol ,istat, giter, iter, iter_max,iter_plot
+  integer :: cufft_plan_r2c, cufft_plan_c2r
+  integer :: num_plot
+  character(len=12) :: string
+  real :: time1,time2
+
+  L=2._fp_kind                   ! Size of the domain
+  Tmax=6.25e-1_fp_kind           ! Final simulation time 
+  Tprint=1.25e-1_fp_kind         ! Print frequency 
+   
+
+  ! Standard resolution is 256, otherwise is read from command line
+  if(command_argument_count()==1) then
+     call get_command_argument(1,string)
+     read(string,*) N
+  else
+     N=256
+  end if
+
+  dx = L/real(N,fp_kind)
+  dy = L/real(N,fp_kind)
+  delta_t = 0.25_fp_kind*dx        ! Time step
+  k4 = ((pi/dx)**2+(pi/dy)**2)**2
+  hypervisc = 2._fp_kind/(k4*delta_t)
+  print *,"delta_t",delta_t
+
+  alpha = real( (/ 0.,.5,.5,1. /),fp_kind) ! RK coefficients
+  
+  iter_plot = nint(Tmax/Tprint)       ! Number of plots
+  iter_max = nint(Tprint/delta_t)     ! Iteration between plots
+  norm = 1._fp_kind/real(N*N,fp_kind) ! Normalization factor for FFTs
+
+  print*,"Running  for ",iter_plot*iter_max," steps on a mesh ", N 
+
+  k_max = N/2                        ! Maximum frequency
+  Nh = N/2+1
+
+  ! Allocate arrays
+  allocate(x(N),y(N),k_x(N),k_y(N),k_x2(N),k_y2(N))
+  allocate(psi(N,N),w(N,N),w_old(N,N), r(N,N,4),sol_host(N,N))
+  allocate(psi_h(Nh,N),wh(Nh,N))
+  allocate(v_x(Nh,N),v_y(Nh,N),w_x(Nh,N),w_y(Nh,N))
+  allocate(v_xr(N,N),v_yr(N,N),w_xr(N,N),w_yr(N,N))
+
+  ! Coordinates
+  x = real((/ (i-1,i=1,N)/), fp_kind) *L/real(N,fp_kind)
+  y = real((/ (i-1,i=1,N)/), fp_kind) *L/real(N,fp_kind)
+
+  ! Wave numbers
+  k_x = real((/ (i-1,i=1,k_max),(i-1-N,i=k_max+1,N) /), fp_kind)* &
+         2._fp_kind*pi/L
+  k_y = real((/ (i-1,i=1,k_max),(i-1-N,i=k_max+1,N) /), fp_kind)* &
+         2._fp_kind*pi/L
+
+  k_y2 = k_y
+  k_x2 = k_x
+  k_y(Nh) = 0._fp_kind
+  k_x(Nh) = 0._fp_kind
+
+  ! Set up cufft
+  istat = cufftCreate(cufft_plan_r2c)
+  istat = cufftCreate(cufft_plan_c2r)
+  
+  ! Real to complex plan 2D
+  istat = cufftPlan2D(cufft_plan_r2c,N,N, FFT_RC_TYPE)
+
+  ! Complex to real plan 2D
+  istat = cufftPlan2D(cufft_plan_c2r,N,N, FFT_CR_TYPE)
+
+  ! Initial streamfunction  for elliptical vortex at the center of the domain
+  sigma=0.15_fp_kind
+  !$cuf kernel do(2)
+  do j=1,N
+     do i=1,N
+        psi(i,j)=-.25_fp_kind*exp(-(4._fp_kind*(x(i)-L/2)**2  &
+             + (y(j)-L/2)**2) &
+             /(2._fp_kind*sigma*sigma))
+     end do
+  end do
+  call write_sample(psi(:,:),sol_host,"psi_0.hdf")
+
+  ! Initial vorticity= Nabla^2 psi
+
+  istat= FFT_exec_R2C(cufft_plan_r2c, psi, wh)
+  !$cuf kernel do(2)
+  do j=1,N
+     do i=1,Nh
+        lap = -(k_x2(i)**2+k_y2(j)**2)
+        if (i==1 .and. j==1) lap=1.0_fp_kind
+        wh(i,j) = wh(i,j)*lap*norm
+     end do
+  end do
+
+  istat= FFT_exec_C2R(cufft_plan_c2r, wh, w)
+
+  call write_sample(w(:,:),sol_host,"omega_0.hdf")
+  print *,"Inital vorticity field"
+  print *," max w", maxval(w),maxloc(w)
+  print *," min w", minval(w),minloc(w)
+
+
+
+  time=0._fp_kind
+
+
+  do giter=1,iter_plot
+     call cpu_time(time1)
+     string='omega_'//achar(giter+48)//'.hdf'
+
+     do iter=1,iter_max
+        w_old= w
+        do ns=1,nns
+           call NLterm(r(:,:,ns),w)
+           if (ns>1) call update(w,w_old,r(:,:,ns-1),alpha(ns))
+        end do
+        call NLterm(r(:,:,nns),w)
+
+        !$cuf kernel do(2)
+        do j=1,n
+           do i=1,n
+              w(i,j)= w_old(i,j)+(r(i,j,1)+2._fp_kind*r(i,j,2) &
+                   + 2._fp_kind*r(i,j,3)+r(i,j,4))/6._fp_kind
+           end do
+        end do
+
+        time=time+delta_t
+     end do
+     call cpu_time(time2)
+     print *,time, "time per step: ",(time2-time1)/iter_max
+
+     call write_sample(w(:,:),sol_host,string)
+     print *,"max w", maxval(w(:,:))
+     print *,"min w", minval(w(:,:))
+
+  end do
+
+contains
+
+  subroutine NLterm(nl,w0)
+    real(fp_kind),device:: nl(N,N),w0(N,N)
+    ! Vorticity in Fourier space
+    istat= FFT_exec_R2C(cufft_plan_r2c, w0, wh)
+    ! Compute non-linear terms 
+
+    !$cuf kernel do(2)
+    do j=1,N
+       do i=1,Nh
+          lap=-(k_x2(i)**2+k_y2(j)**2)
+          if( i==1 .and. j==1) lap=real(1.,fp_kind)
+          v_x(i,j)= cmplx(0.,k_y(j),fp_kind)*wh(i,j)/lap*norm
+          v_y(i,j)= cmplx(0.,k_x(i),fp_kind)*wh(i,j)/lap*norm
+          w_x(i,j)= cmplx(0.,k_x(i),fp_kind)*wh(i,j)*norm
+          w_y(i,j)= cmplx(0.,k_y(j),fp_kind)*wh(i,j)*norm
+          psi_h(i,j)= wh(i,j)*(lap*lap)*norm
+       end do
+    end do
+    
+    ! Non-linear term in physical space
+
+    istat=FFT_exec_C2R(cufft_plan_c2r, v_x,v_xr)
+    istat=FFT_exec_C2R(cufft_plan_c2r, v_y,v_yr)
+    istat=FFT_exec_C2R(cufft_plan_c2r, w_x,w_xr)
+    istat=FFT_exec_C2R(cufft_plan_c2r, w_y,w_yr)
+    istat=FFT_exec_C2R(cufft_plan_c2r, psi_h,psi)
+
+    
+    !$cuf kernel do(2)
+    do j=1,N
+       do i=1,N
+          nl(i,j)=delta_t*(v_xr(i,j)*w_xr(i,j)&
+               -v_yr(i,j)*w_yr(i,j)-hypervisc*psi(i,j))
+       end do
+    end do
+  end subroutine NLterm
+
+  subroutine update(x1,x2,x3,alpha)
+    real(fp_kind),device::x1(N,N), x2(N,N), x3(N,N)
+    real(fp_kind)::alpha
+    integer:: i,j
+    !$cuf kernel do(2)
+    do j=1,N
+       do i=1,N
+          x1(i,j)=x2(i,j)+alpha*x3(i,j)
+       end do
+    end do
+  end subroutine update
+
+  subroutine write_sample(sample_d,sample, fname)
+    use cudafor
+    real(fp_kind), intent(in),device :: sample_d(N, N)
+    real(fp_kind),pinned :: sample(N, N)
+    character(len=*) :: fname
+    integer :: err,funit=17
+    
+    sample=sample_d
+    
+    open(funit,name=fname,form='unformatted')
+    write(funit) sample
+    close(funit)
+    
+  end subroutine write_sample
+
+end program ns2d

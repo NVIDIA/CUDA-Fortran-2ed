@@ -1,0 +1,49 @@
+module m
+contains
+  attributes(grid_global) subroutine smooth(a,b,n,radius)
+    use cooperative_groups
+    implicit none
+    real :: a(n), b(n)
+    integer, value :: n, radius
+    integer :: i, j, jj
+    type(grid_group) :: gg
+    real :: bt
+    
+    gg = this_grid()
+    do i = gg%rank, n, gg%size
+       a(i) = i 
+    end do
+
+    call syncthreads(gg)
+
+    do i = gg%rank, n, gg%size
+       bt = 0.0
+       do j = i-radius, i+radius
+          jj = j
+          if (j < 1) jj = jj + n
+          if (j > n) jj = jj - n
+          bt = bt + a(jj)
+        enddo
+        b(i) = bt/(2*radius+1)
+    enddo
+
+  end subroutine smooth
+end module m
+
+program main
+  use cudafor
+  use m
+  implicit none
+  integer, parameter :: n = 1024*1024
+  real :: a(n), b(n)
+  real, device :: a_d(n), b_d(n)
+  integer :: i, radius
+  radius = 2
+  call smooth<<<*,256>>>(a_d, b_d, n, radius)
+  a = a_d
+  b = b_d
+  print *, 'Filter radius: ', radius
+  do i = 1, n
+     if (abs(b(i)-a(i)) > 0.00010) print *, i, a(i), b(i)
+  enddo
+end program main

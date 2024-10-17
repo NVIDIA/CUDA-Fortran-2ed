@@ -1,0 +1,33 @@
+program pipeline
+  use cudafor
+  implicit none
+  integer, parameter :: n=100000
+  integer, parameter :: nStreams=6
+  real, device :: a_d(n,nStreams)
+  real, pinned, allocatable :: a(:,:)
+  integer(kind=cuda_stream_kind) :: streams(nStreams)
+  integer :: istat, i, j
+
+  do j = 1, nStreams
+     istat = cudaStreamCreate(streams(j))
+  enddo
+
+  allocate(a(n,nStreams))
+  a = 1.0
+
+  do j = 1, nStreams
+     istat = cudaMemcpyAsync(a_d(1,j), a(1,j), n, streams(j))
+     !$cuf kernel do <<<1,1,stream=streams(j)>>>
+     do i = 1, n
+        a_d(i,j) = a_d(i,j) + 1.0
+     enddo
+     istat = cudaMemcpyAsync(a(1,j), a_d(1,j), n, streams(j))
+  enddo
+
+  istat = cudaDeviceSynchronize()
+  if (all(a == 2.0)) print *, 'OK'
+  
+  do j = 1, nStreams
+     istat = cudaStreamDestroy(streams(j))
+  enddo
+end program pipeline

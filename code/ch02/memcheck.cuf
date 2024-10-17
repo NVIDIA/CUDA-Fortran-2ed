@@ -1,0 +1,38 @@
+module simpleOps_m
+contains
+  attributes(global) subroutine increment(a, n, b)
+    implicit none
+    integer, intent(inout) :: a(*)
+    integer, value :: n, b
+    integer :: i
+
+    i = blockDim%x*(blockIdx%x-1) + threadIdx%x-1 ! *incorrect*
+    if (i <= n) then
+       a(i) = a(i)+b
+    end if
+  end subroutine increment
+end module simpleOps_m
+
+
+program main  
+  use cudafor
+  use simpleOps_m
+  implicit none
+  integer, parameter :: tPB=32*5, n=tPB*5+1, b = 3
+  integer :: a(n), r(n), i
+  integer, device :: a_d(n)
+
+  do i = 1, n
+     a(i) = i
+  end do
+
+  a_d = a
+  call increment<<<ceiling(real(n)/tPB),tPB>>>(a_d, n, b)
+  r = a_d
+
+  if (any(r /= a+b)) then
+     print *, '**** Program Failed ****'
+  else
+     print *, 'Program Passed'
+  endif
+end program main

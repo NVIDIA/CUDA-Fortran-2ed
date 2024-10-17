@@ -1,0 +1,80 @@
+module reverse
+contains
+  attributes(global) subroutine staticReverse(d)
+    implicit none
+    real :: d(*)   
+    real, shared :: s(64)    
+    integer :: t, tr
+
+    t = threadIdx%x
+    tr = blockDim%x-t+1
+
+    s(t) = d(t)
+    call syncthreads()  
+    d(t) = s(tr)
+  end subroutine staticReverse
+
+  attributes(global) subroutine dynamicReverse(d)
+    implicit none
+    real :: d(*)   
+    real, shared :: s(*)
+    integer :: t, tr
+
+    t = threadIdx%x
+    tr = blockDim%x-t+1
+
+    s(t) = d(t)
+    call syncthreads()  
+    d(t) = s(tr)
+  end subroutine dynamicReverse
+
+  attributes(global) subroutine dynamicReverseAuto(d, n)
+    implicit none
+    real :: d(n)
+    integer, value :: n
+    real, shared :: s(n)
+    integer :: t, tr
+
+    t = threadIdx%x
+    tr = n-t+1
+
+    s(t) = d(t)
+    call syncthreads()  
+    d(t) = s(tr)
+  end subroutine dynamicReverseAuto
+end module reverse
+
+
+program sharedExample
+  use cudafor
+  use reverse
+
+  implicit none
+
+  integer, parameter :: n = 64
+  real :: a(n), r(n), d(n)
+  real, device :: d_d(n)
+  integer :: i
+
+  do i = 1, n
+     a(i) = i
+     r(i) = n-i+1
+  enddo
+
+  d_d = a
+  call staticReverse<<<1, n>>>(d_d)
+  d = d_d
+  print *, 'staticReverse max error:', maxval(abs(r-d))
+
+  d_d = a
+  call dynamicReverse<<<1, n, 4*n>>>(d_d)
+  d = d_d
+  print *, 'dynamicReverse max error:', maxval(abs(r-d))
+
+  d_d = a
+  call dynamicReverseAuto<<<1, n, 4*n>>>(d_d, n)
+  d = d_d
+  print *, 'dynamicReverseAuto max error:', maxval(abs(r-d))
+end program sharedExample
+
+

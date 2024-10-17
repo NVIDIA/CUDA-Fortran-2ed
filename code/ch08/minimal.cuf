@@ -1,0 +1,39 @@
+module kernel
+contains
+  attributes(global) subroutine assign(a, v)
+    implicit none
+    real :: a(*)
+    real, value :: v
+    a(threadIdx%x) = v
+  end subroutine assign
+end module kernel
+
+program minimal
+  use cudafor
+  use kernel
+  implicit none
+  integer, parameter :: n=32
+  real :: a(n)
+  real, device, allocatable :: a0_d(:), a1_d(:)
+  integer :: nDevices, istat
+
+  istat = cudaGetDeviceCount(nDevices)
+  if (nDevices < 2) then
+     print *, 'This program requires at least two GPUs'
+     stop
+  end if
+  
+  istat = cudaSetDevice(0)
+  allocate(a0_d(n))
+  call assign<<<1,n>>>(a0_d, 3.0)
+  a = a0_d
+  deallocate(a0_d)
+  print *, 'Device 0: ', a(1)
+
+  istat = cudaSetDevice(1)
+  allocate(a1_d(n))
+  call assign<<<1,n>>>(a1_d, 4.0)
+  a = a1_d
+  deallocate(a1_d)
+  print *, 'Device 1: ', a(1)
+end program minimal

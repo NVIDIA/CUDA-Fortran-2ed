@@ -1,0 +1,30 @@
+module m
+contains
+  attributes(global) subroutine s(a, nWarps)
+    implicit none
+    integer :: a(nWarps)
+    integer, value :: nWarps
+    integer :: mask, laneID, warpID
+
+    warpID = ishft(threadIdx%x-1,-5)+1
+    laneID = iand(threadIdx%x-1,31)+1
+
+    mask = ballot(threadIdx%x > 40)
+    mask = ballot_sync(mask, mod(threadIdx%x,2) == 0)
+    if (laneID == 1) a(warpID) = mask
+  end subroutine s
+end module m
+
+program ballot
+  use m
+  implicit none
+  integer, parameter :: nWarps = 3  
+  integer :: a(nWarps), i
+  integer, device :: a_d(nWarps)
+
+  call s<<<1,nWarps*32>>>(a_d, nWarps)
+  a = a_d
+  do i = 1, nWarps
+     print "(i0, 1x, B32.32)", i, a(i)
+  enddo
+end program ballot

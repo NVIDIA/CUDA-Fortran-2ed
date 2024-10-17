@@ -1,0 +1,167 @@
+program compute_pi
+  use precision_m
+  use curand
+  use cudafor
+  use pi_lock_m
+  use pi_shared_m
+  use pi_shfl_m
+  use pi_gridGroup_m
+  implicit none
+  integer, parameter :: gridSize = 128, blockSize = 128
+  real(fp_kind), allocatable:: hostData(:)
+  real(fp_kind), allocatable, device:: deviceData(:)
+  real(fp_kind):: pival
+  type(curandGenerator) :: gen
+  
+  integer :: inside, inside_cpu, inside_cuf
+  integer :: inside_shared, inside_lock, inside_shfl, inside_gg
+  integer, device :: partial_d(gridSize)
+  integer :: N, twoN
+  integer(8) :: seed
+  
+  integer :: iter, i, istat
+
+  ! grid global 
+  type(cudaDeviceProp) :: prop
+  integer :: gridSizeGG
+  integer, device, allocatable :: partialGG_d(:)
+      
+  integer :: clock_start, clock_end, clock_rate
+  real :: elapsed_cuf, elapsed_shared, elapsed_lock, &
+       elapsed_shfl, elapsed_gg, elapsed_cpu
+  
+  call system_clock(count_rate=clock_rate) ! Find the rate
+  
+  ! find gridsizeGG for grid_global kernel
+  istat = cudaGetDeviceProperties(prop, 0)
+  istat = cudaOccupancyMaxActiveBlocksPerMultiprocessor( &
+       gridSizeGG, pi_gg, blockSize, 0)
+  gridSizeGG = gridSizeGG*prop%multiProcessorCount
+  allocate(partialGG_d(gridSizeGG))
+  
+  ! Define how many points we want to generate
+  
+  N=10000
+  ! Set seed
+  ! seed=1234
+  seed=1234567
+  
+  if (fp_kind == singlePrecision) then
+     print "('Compute pi in single precision, seed = ', i0)", seed
+  else
+     print "('Compute pi in double precision, seed = ', i0)", seed
+  end if
+  print "(' using <<<',i0,',',i0,'>>>')", gridSize, blockSize
+  print "('       <<<',i0,',',i0,'>>> for grid_global kernel')", gridSizeGG, blockSize
+  
+#ifdef LOOP
+  do iter=1,4
+     N=N*10
+#endif
+
+     ! x(N)=data(1:N), y(N)=data(N+1:twoN) 
+     twoN = 2*N
+     
+     ! allocate host and device arrays
+     allocate(hostData(twoN), deviceData(twoN))
+     
+     ! Create pseudonumber generator
+     istat = curandCreateGenerator(gen, CURAND_RNG_PSEUDO_DEFAULT)
+     if (istat /= CURAND_STATUS_SUCCESS) &
+          print *, 'Error in curandCreateGenerator', CURAND_STATUS_SUCCESS
+     istat = curandSetPseudoRandomGeneratorSeed( gen, seed)
+     if (istat /= CURAND_STATUS_SUCCESS) &
+          print *, 'Error in curandSetPseudoRandomGenerator', CURAND_STATUS_SUCCESS
+     
+     ! Generate N floats or double on device
+     istat = curandGenerate(gen, deviceData, twoN)
+     
+     ! Copy the data back to CPU to check result later
+     hostData=deviceData
+     
+     ! Perform the test on GPU using CUF kernel
+     inside=0
+     call system_clock(count=clock_start) ! Start timing
+     !$cuf kernel do <<<*,*>>>
+     do i=1,N
+        if( (deviceData(i)**2+deviceData(i+N)**2) <= 1._fp_kind) inside=inside+1
+     end do
+     inside_cuf=inside
+     call system_clock(count=clock_end) ! End timing
+     elapsed_cuf=REAL(clock_end-clock_start,doublePrecision)/REAL(clock_rate,doublePrecision)
+     
+     ! Perform the test on GPU with reduction in shared memory via two kernels
+     call system_clock(count=clock_start) ! Start timing
+     call partial_pi_shared<<<gridSize,blockSize,blockSize*4>>> &
+          (deviceData, partial_d, twoN)
+     call final_pi_shared<<<1,gridSize,gridSize*4>>>(partial_d)
+     inside_shared=partial_d(1)
+     call system_clock(count=clock_end) ! End timing
+     elapsed_shared=REAL(clock_end-clock_start,doublePrecision)/REAL(clock_rate,doublePrecision)
+     
+     ! Perform the test on GPU using atomic lock in single kernel
+     call system_clock(count=clock_start) ! Start timing
+     partial_d(1) = 0
+     call pi_lock<<<gridSize,blockSize,blockSize*4>>> &
+          (deviceData,partial_d,twoN)
+     inside_lock=partial_d(1)
+     call system_clock(count=clock_end) ! End timing
+     elapsed_lock=REAL(clock_end-clock_start,doublePrecision)/REAL(clock_rate,doublePrecision)
+          
+     ! Perform the test on GPU with SHFL reduction
+     call system_clock(count=clock_start) ! Start timing
+     call partial_pi_shfl<<<gridSize,blockSize>>> &
+          (deviceData, partial_d, twoN)
+     call final_pi_shfl<<<1,gridSize>>>(partial_d)
+     inside_shfl=partial_d(1)
+     call system_clock(count=clock_end) ! End timing
+     elapsed_shfl=REAL(clock_end-clock_start,doublePrecision)/REAL(clock_rate,doublePrecision)
+     
+     ! Perform test using grid_global kernel
+     call system_clock(count=clock_start) ! Start timing
+     call pi_gg<<<gridSizeGG,blockSize>>>(deviceData, partialGG_d, twoN)
+     inside_gg=partialGG_d(1)
+     call system_clock(count=clock_end) ! End timing
+     elapsed_gg=REAL(clock_end-clock_start,doublePrecision)/REAL(clock_rate,doublePrecision)
+       
+     ! Perform the test on CPU 
+     inside_cpu=0
+     call system_clock(count=clock_start) ! Start timing
+     !$omp parallel do reduction(+: inside_cpu) if (N > 10000)
+     do i=1,N
+        if( (hostData(i)**2+hostData(i+N)**2) <= 1._fp_kind ) & 
+             inside_cpu=inside_cpu+1
+     end do
+     !$omp end parallel do 
+     call system_clock(count=clock_end) ! End timing
+     elapsed_cpu=REAL(clock_end-clock_start,doublePrecision)/REAL(clock_rate,doublePrecision)
+
+     ! Check the results
+     if ( (inside_cuf .eq. inside_shared) .and. (inside_cuf .eq. inside_lock) &
+          .and. (inside_cuf .eq. inside_shfl) .and. (inside_cuf .eq. inside_gg)) then
+        inside = inside_cuf
+     else
+        print *,"Mismatch between GPU implementations: ", &
+             inside_cuf, inside_shared, inside_shfl, inside_lock, inside_gg
+     end if
+     if (inside_cpu .ne. inside) print *,"Mismatch between CPU/GPU", inside_cpu, inside
+     ! Print the value of pi and the error
+     pival= 4._fp_kind*real(inside,fp_kind)/real(N,fp_kind)
+     print"(/, a, i0, a, f10.8, a, e11.4)", &
+          ' Samples = ', N, ', Pi = ', pival, ', Error = ', abs(pival-2.0_fp_kind*asin(1.0_fp_kind))
+     
+     print "(' CUF kernel      2-stage shared  2-stage shfl    Atomic lock     Grid global     CPU')"
+     print '(6(e12.5,4x))', elapsed_cuf, elapsed_shared, elapsed_shfl, elapsed_lock, elapsed_gg, elapsed_cpu
+     
+     ! Deallocate data on CPU and GPU
+     deallocate(hostData, deviceData)
+     
+     ! Destroy the generator
+     istat = curandDestroyGenerator(gen)
+     
+#ifdef LOOP
+  end do
+#endif
+  deallocate(partialGG_d)
+  
+end program compute_pi

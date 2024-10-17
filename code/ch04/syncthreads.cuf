@@ -1,0 +1,31 @@
+module m
+contains
+  attributes(global) subroutine s1(offset)
+    implicit none
+    integer, value :: offset
+    integer :: tid, res
+    tid = threadIdx%x
+
+    res = syncthreads_and(tid > offset)
+    if (tid == 1) print *, 'syncthreads_and(tid > offset):   ', res
+    res = syncthreads_or(tid > offset)
+    if (tid == 1) print *, 'syncthreads_or(tid > offset):    ', res
+    res = syncthreads_count(tid > offset)
+    if (tid == 1) print *, 'syncthreads_count(tid > offset): ', res        
+  end subroutine s1
+end module m
+
+program syncthreads
+  use m
+  use cudafor
+  implicit none
+  integer :: istat
+
+  print *, 'offset = 0'
+  call s1<<<1, 256>>>(0)
+  istat = cudaDeviceSynchronize()
+
+  print *, 'offset = 4'
+  call s1<<<1, 256>>>(4)
+  istat = cudaDeviceSynchronize()
+end program syncthreads

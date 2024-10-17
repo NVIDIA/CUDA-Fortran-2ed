@@ -1,0 +1,55 @@
+program twoKernels
+  use cudafor
+  implicit none
+  integer, parameter :: n=100000
+  real, device :: a_d(n,2)
+  real :: a(n,2)
+  integer(kind=cuda_stream_kind) :: stream1, stream2
+  integer :: istat, i
+
+  istat = cudaStreamCreate(stream1)
+  istat = cudaStreamCreate(stream2)
+  a = 1.0
+
+  ! two kernels in the null stream
+
+  a_d = a
+  !$cuf kernel do <<<1,1>>>
+  do i = 1, n
+     a_d(i,1) = a_d(i,1) + i
+  enddo
+  !$cuf kernel do <<<1,1>>>
+  do i = 1, n
+     a_d(i,2) = a_d(i,2) - i
+  enddo
+  a = a_d
+
+  ! one kernel in blocking stream, one in null stream
+
+  a_d = a
+  !$cuf kernel do <<<1,1,stream=stream1>>>
+  do i = 1, n
+     a_d(i,1) = a_d(i,1) + i
+  enddo
+  !$cuf kernel do <<<1,1>>>
+  do i = 1, n
+     a_d(i,2) = a_d(i,2) - i
+  enddo
+  a = a_d
+  
+  ! two kernels in different, blocking streams
+
+  a_d = a
+  !$cuf kernel do <<<1,1,stream=stream1>>>
+  do i = 1, n
+     a_d(i,1) = a_d(i,1) + i
+  enddo
+  !$cuf kernel do <<<1,1,stream=stream2>>>
+  do i = 1, n
+     a_d(i,2) = a_d(i,2) - i
+  enddo
+  a = a_d
+  
+  istat = cudaStreamDestroy(stream1)
+  istat = cudaStreamDestroy(stream2)
+end program twoKernels

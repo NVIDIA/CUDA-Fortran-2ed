@@ -1,0 +1,170 @@
+program fftOverlap
+  use cudafor
+  use precision_m
+  use cufft
+  use nvtx
+  implicit none
+
+  complex(fp_kind), allocatable,dimension(:,:,:) :: A,B,C
+#ifndef MANAGED
+  attributes(pinned) :: A,B,C
+#else
+  attributes(managed) :: A,B,C
+#endif
+  complex(fp_kind), allocatable, dimension(:,:,:), device :: A_d,B_d
+  integer, parameter :: num_streams=4
+  integer :: nx, ny, nomega, ifr, i,j, stream_index, plan
+  integer :: clock_start,clock_end,clock_rate, istat
+  integer(kind=cuda_stream_kind) :: stream(num_streams)
+  real :: elapsed_time
+  real(fp_kind) :: scale
+
+  nx=512; ny=512;  nomega=196
+  scale = 1./real(nx*ny,fp_kind)
+
+  ! Initialize FFT plan
+  istat = cufftPlan2d(plan,ny,nx,CUFFT_C2C)
+
+  ! Create streams
+  do i = 1,num_streams
+     istat= cudaStreamCreate(stream(i))
+  end do
+
+  call SYSTEM_CLOCK(COUNT_RATE=clock_rate) ! Find the rate
+
+  ! Allocate arrays on CPU and GPU
+  allocate(A(nx,ny,nomega), B(nx,ny,nomega), C(nx,ny,nomega))
+  allocate(A_d(nx,ny,num_streams), B_d(nx,ny,num_streams))
+
+  ! Initialize arrays on CPU
+  A=cmplx(1.,1.,fp_kind); B=cmplx(1.,1.,fp_kind); C=cmplx(0.,0.,fp_kind)
+
+  ! Measure only the transfer time
+  istat=cudaDeviceSynchronize()
+
+  print *,"I/O only"
+  call SYSTEM_CLOCK(COUNT=clock_start) ! Start timing
+
+  call nvtxStartRange("I/O only")
+
+  do ifr=1,nomega
+     istat= cudaMemcpy(A_d(1,1,1),A(1,1,ifr),nx*ny)
+     istat= cudaMemcpy(B_d(1,1,1),B(1,1,ifr),nx*ny)
+     istat= cudaMemcpy(C(1,1,ifr),A_d(1,1,1),nx*ny)
+  end do
+
+  istat=cudaDeviceSynchronize()
+  call nvtxEndRange
+  call SYSTEM_CLOCK(COUNT=clock_end) ! End timing
+  elapsed_time=REAL(clock_end-clock_start)/REAL(clock_rate)
+  print *,"Elapsed time :",elapsed_time, &
+          "Sustained BW (GB/s):",3*sizeof(A)/elapsed_time/(1000**3)
+
+  ! Measure the transfer time H2D, FFT , IFFT and transfer time D2H
+
+  print '(/a)',"Single stream  loop"
+  istat=cudaDeviceSynchronize()
+  call SYSTEM_CLOCK(COUNT=clock_start) ! Start timing
+  call nvtxStartRange("Single Stream Loop")
+  stream_index = 1
+  istat=cufftSetStream(plan,stream(stream_index))
+  do ifr=1,nomega
+     istat= cudaMemcpy(A_d(1,1,stream_index),A(1,1,ifr),nx*ny)
+     istat= cudaMemcpy(B_d(1,1,stream_index),B(1,1,ifr),nx*ny)
+     istat=cufftExecC2C(plan ,A_d(1,1,stream_index),&
+          A_d(1,1,stream_index),CUFFT_FORWARD)
+     istat=cufftExecC2C(plan ,B_d(1,1,stream_index),&
+          B_d(1,1,stream_index),CUFFT_FORWARD)
+
+     ! Convolution and scaling of the  arrays
+     !$cuf kernel do(2) <<<*,(16,16),stream=stream(stream_index)>>>
+     do j=1,ny
+        do i=1,nx
+           B_d(i,j,stream_index)= A_d(i,j,stream_index)*&
+                B_d(i,j,stream_index)*scale
+        end do
+     end do
+
+     istat=cufftExecC2C(plan ,B_d(1,1,stream_index),&
+          B_d(1,1,stream_index),CUFFT_INVERSE)
+     istat=cudaMemcpy( C(1,1,ifr),B_d(1,1,stream_index),nx*ny)
+  end do
+
+  istat=cudaDeviceSynchronize()
+  call nvtxEndRange
+  call SYSTEM_CLOCK(COUNT=clock_end) ! End timing
+  elapsed_time=REAL(clock_end-clock_start)/REAL(clock_rate)
+  print *,"Elapsed time :",elapsed_time
+
+  ! Overlap I/O and compute using multiple streams and async copies
+  print '(/a)',"Do loop with multiple streams"
+  call SYSTEM_CLOCK(COUNT=clock_start) ! Start timing
+
+  call nvtxStartRange("Multiple Streams Loop")
+  do ifr=1,nomega
+
+     ! assign a stream for the current plan
+     stream_index = mod(ifr,num_streams)+1
+
+     ! Set the stream used by CUFFT
+     istat=cufftSetStream(plan,stream(stream_index))
+
+     ! Send A to GPU
+
+     call nvtxStartRange("memcpy A",stream_index)
+     istat= cudaMemcpyAsync(A_d(1,1,stream_index),A(1,1,ifr),&
+                        nx*ny, stream(stream_index))
+     call nvtxEndRange
+     ! Execute forward FFTs on GPU
+     call nvtxStartRange("FFT A",stream_index)
+     istat=cufftExecC2C(plan ,A_d(1,1,stream_index),&
+          A_d(1,1,stream_index),CUFFT_FORWARD)
+     call nvtxEndRange
+
+     ! Send B to GPU
+     call nvtxStartRange("memcpy B",stream_index)
+     istat=cudaMemcpyAsync(B_d(1,1,stream_index), &
+          B(1,1,ifr),nx*ny, stream(stream_index))
+     call nvtxEndRange
+     
+     ! Execute forward FFTs on GPU
+     call nvtxStartRange("FFT B",stream_index)
+     istat=cufftExecC2C(plan ,B_d(1,1,stream_index),&
+          B_d(1,1,stream_index),CUFFT_FORWARD)
+     call nvtxEndRange
+
+     ! Convolution and scaling of the  arrays
+     call nvtxStartRange("convolve ",stream_index)
+     !$cuf kernel do(2) <<<*,(16,16),stream=stream(stream_index)>>>
+     do j=1,ny
+        do i=1,nx
+           B_d(i,j,stream_index)= A_d(i,j,stream_index)* &
+                B_d(i,j,stream_index)*scale
+        end do
+     end do
+     
+     call nvtxEndRange
+     ! Execute inverse FFTs on GPU
+     call nvtxStartRange("IFFT ",stream_index)
+     istat=cufftExecC2C(plan ,B_d(1,1,stream_index), &
+          B_d(1,1,stream_index),CUFFT_INVERSE)
+     
+     call nvtxEndRange
+     ! Copy results back
+     call nvtxStartRange("memcopy C ",stream_index)
+     istat=cudaMemcpyAsync( C(1,1,ifr),B_d(1,1,stream_index), &
+          nx*ny, stream=stream(stream_index))
+     call nvtxEndRange
+  end do
+
+  call nvtxEndRange
+  istat=cudaDeviceSynchronize()
+  call SYSTEM_CLOCK(COUNT=clock_end) ! Start timing
+  elapsed_time=REAL(clock_end-clock_start)/REAL(clock_rate)
+  print *,"Elapsed time :",elapsed_time
+  
+  deallocate(A,B,C); deallocate(A_d,B_d)
+  istat= cufftDestroy(plan)
+  
+end program fftOverlap
+

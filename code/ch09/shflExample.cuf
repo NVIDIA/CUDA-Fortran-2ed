@@ -1,0 +1,39 @@
+module shuffle_m
+contains
+  attributes(global) subroutine shuffle_xor(len)
+    integer:: i,n,depth
+    integer,value:: len
+    
+    i=threadIdx%x
+    depth=bit_size(len)-leadz(len)-1  !log2(len)
+    do n=depth,1,-1
+       i=i+__shfl_xor(i,ishft(len,-n),len)
+       print*,threadIdx%x,ishft(len,-n),i
+    end do
+  end subroutine shuffle_xor
+  
+  attributes(global) subroutine shuffle_down(len)
+    integer:: i,n,depth
+    integer,value:: len
+    
+    i=threadIdx%x
+    depth=bit_size(len)-leadz(len)-1   !log2(len)
+    do n=depth,1,-1
+       i=i+__shfl_down(i,ishft(len,-n),len)
+       print*,threadIdx%x,ishft(len,-n),i
+    end do
+  end subroutine shuffle_down
+end module shuffle_m
+
+program test_shuffle
+  use cudafor
+  use shuffle_m
+  integer:: depth
+  print *,"  Thread id","   laneMask   ","   __shfl_xor"
+  len=8
+  call shuffle_xor<<<1,len>>>(len)
+  istat=cudaDeviceSynchronize()
+  print *,"  Thread id","    delta     ","     __shfl_down"
+  call shuffle_down<<<1,len>>>(len)
+  istat=cudaDeviceSynchronize()
+end program test_shuffle

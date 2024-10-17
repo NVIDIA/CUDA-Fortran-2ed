@@ -1,0 +1,41 @@
+module m
+contains
+  attributes(global) subroutine s(a)
+    implicit none
+    integer :: a(warpsize, 6)
+    integer :: laneMask, stage
+    integer :: var
+
+    var = threadIdx%x
+    a(threadIdx%x,1) = var
+
+    laneMask = 1
+    stage = 2
+    do
+       var = var + __shfl_xor(var, laneMask)
+       laneMask = laneMask*2
+
+       a(threadIdx%x, stage) = var; stage = stage+1
+       if (laneMask > 16) exit
+    enddo
+  end subroutine s
+end module m
+
+program shfl
+  use m
+  implicit none
+  integer, device :: a_d(32, 6)
+  integer :: a(32, 6), i
+
+  call s<<<1,32>>>(a_d)
+  a = a_d
+
+  do i = 1, 6
+     print "(16I4)", a(1:16,i)
+  enddo
+  print *
+  do i = 1, 6
+     print "(16I4)", a(17:32,i)
+  enddo
+  
+end program shfl

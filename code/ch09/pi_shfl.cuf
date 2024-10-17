@@ -1,0 +1,88 @@
+module pi_shfl_m
+contains
+  attributes(global) subroutine partial_pi_shfl(input, partial, twoN)
+    use precision_m
+    implicit none
+    real(fp_kind) :: input(twoN)
+    integer :: partial(*)
+    integer, value :: twoN
+
+    integer, shared :: p_s(32)
+    integer :: N, interior 
+    integer :: i, tid, width, warpID, laneID
+    
+    N = twoN/2
+    tid = threadIdx%x+(BlockIdx%x-1)*BlockDim%x
+
+    interior=0
+    do i = tid, N, BlockDim%x*GridDim%x
+       if( (input(i)**2+input(i+N)**2) <= 1._fp_kind ) &
+            interior=interior+1
+    end do
+
+    ! Local reduction per warp
+    i = 1
+    do while (i < warpsize)
+       interior = interior + __shfl_xor(interior,i)
+       i = i*2
+    end do
+    
+    ! first element of a warp writes to shared memory
+    warpID = (threadIdx%x-1)/warpsize+1       ! warp ID within block
+    laneID = threadIdx%x-(warpID-1)*warpsize  ! thread ID within warp
+    if (laneID == 1) p_s(warpID)=interior  
+    call syncthreads()
+
+    ! reduction of shared memory values by first warp
+    if (warpID == 1) then
+       interior = p_s(laneID)
+       width = blockDim%x/warpsize
+       i = 1
+       do while (i < width)
+          interior = interior + __shfl_xor(interior, i, width)
+          i = i*2
+       end do
+       if (laneID == 1) partial(blockIdx%x) = interior
+    end if
+  end subroutine partial_pi_shfl
+
+  attributes(global) subroutine final_pi_shfl(partial)
+    implicit none
+    integer :: partial(*)
+    
+    integer, shared :: p_s(32)
+    integer :: val
+    integer :: i, warpID, laneID, width
+
+    warpID = (threadIdx%x-1)/warpsize+1
+    laneID = threadIdx%x - (warpID-1)*warpsize     
+
+    val = partial(threadIdx%x)
+    i = 1
+    do while (i < warpsize)
+       val = val + __shfl_xor(val, i)
+       i = i*2
+    enddo
+    
+    ! if more than one warp, reduce amongst warps
+    if (blockDim%x > warpsize) then
+       if (laneID == 1) p_s(warpID) = val
+       call syncthreads()
+
+       if (warpID == 1) then
+          val = p_s(laneID)
+          width = blockDim%x/warpsize
+          i = 1
+          do while (i < width)
+             val = val + __shfl_xor(val, i, width)
+             i=i*2
+          enddo
+       end if
+    endif
+    
+    if (warpID == 1 .and. laneID == 1) partial(1) = val
+  end subroutine final_pi_shfl
+
+end module pi_shfl_m
+
+

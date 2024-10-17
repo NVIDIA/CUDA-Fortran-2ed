@@ -1,0 +1,92 @@
+module pi_gridGroup_m
+contains
+  attributes(grid_global) subroutine pi_gg(input, partial, twoN)
+    use cooperative_groups
+    use precision_m
+    implicit none
+    real(fp_kind) :: input(twoN)
+    integer :: partial(*)
+    integer, value :: twoN
+
+    integer, shared :: p_s(32)
+    type(grid_group) :: gg
+    integer :: N, interior 
+    integer :: i, warpID, laneID, width
+
+    warpID = ishft(threadIdx%x-1,-5)+1
+    laneID = iand(threadIdx%x-1,31)+1
+    N = twoN/2
+
+    gg = this_grid()
+
+    interior=0
+    do i = gg%rank, N, gg%size
+       if( (input(i)**2+input(i+N)**2) <= 1._fp_kind ) &
+            interior=interior+1
+    end do
+
+    ! Local reduction per warp
+    i = 1
+    do while (i < warpsize)
+       interior = interior + __shfl_xor(interior,i)
+       i = i*2
+    end do
+    
+    ! first element of a warp writes to shared memory
+    if (laneID == 1) p_s(warpID)=interior  
+
+    call syncthreads(this_thread_block())
+
+    ! reduction of shared memory values by first warp
+    if (warpID == 1) then
+       interior = p_s(laneID)
+       width = blockDim%x/warpsize
+       i = 1
+       do while (i < width)
+          interior = interior + __shfl_xor(interior, i, width)
+          i = i*2
+       end do
+       if (laneID == 1) partial(blockIdx%x) = interior
+    end if
+
+    call syncthreads(gg)
+
+    if (blockIdx%x == 1) then
+       
+       ! block-stride loop (if gridDim%x > blockDim%x)
+       interior = 0
+       do i = threadIdx%x, gridDim%x, blockDim%x 
+          interior = interior + partial(i)
+       enddo
+       
+       i = 1
+       do while (i < warpsize)
+          interior = interior + __shfl_xor(interior, i)
+          i = i*2
+       enddo
+
+       ! if more than one warp, reduce amongst warps
+       if (gridDim%x > warpsize) then
+          if (warpID == 1) p_s(laneID) = 0
+          call syncthreads(this_thread_block())
+          if (laneID == 1) p_s(warpID) = interior
+          call syncthreads(this_thread_block())
+
+          if (warpID == 1) then
+             interior = p_s(laneID)
+             i = 1
+             do while (i < warpsize)
+                interior = interior + __shfl_xor(interior, i)
+                i=i*2
+             enddo
+          end if
+       endif
+    
+       if (warpID == 1 .and. laneID == 1) partial(1) = interior
+    end if
+
+  end subroutine pi_gg
+
+end module pi_gridGroup_m
+
+

@@ -1,0 +1,22 @@
+module m
+contains
+  subroutine s1
+    call s2
+    call s2
+  end subroutine s1
+
+  subroutine s2
+    call sleep(1)
+  end subroutine s2
+end module m
+
+program main
+  use m
+  implicit none
+  integer :: n
+
+  do n = 1, 4
+     call s1
+  enddo
+
+end program main

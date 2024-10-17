@@ -1,0 +1,58 @@
+program fft_test_c2c
+  use precision_m
+  use cufft
+  implicit none
+  integer, allocatable :: kx(:)
+  complex(fp_kind), allocatable :: cinput(:),coutput(:)
+  complex(fp_kind), allocatable, device :: cinput_d(:),coutput_d(:)
+
+  interface cufftExec
+     module procedure cufftExecC2C,cufftExecZ2Z
+  end interface cufftExec
+
+  integer :: i,n,plan,istat
+  real(fp_kind) :: pi=4._fp_kind*atan(1._fp_kind), h, theta
+  
+  n=16
+  h=2._fp_kind*pi/real(n,fp_kind)
+
+  ! allocate arrays on the host
+  allocate(cinput(n),coutput(n),kx(n))
+
+  ! allocate arrays on the device
+  allocate(cinput_d(n),coutput_d(n))
+
+  ! initialize arrays on host
+  kx = [(i-1, i=1,n/2), (-n+i-1, i=n/2+1,n)]
+
+  do i=1,n
+     cinput(i)=(cos(2*real(i-1,fp_kind)*h)+sin(3*real(i-1,fp_kind)*h))
+  end do
+
+  ! copy arrays to device
+  cinput_d=cinput
+
+
+  ! initialize the plan for complex to complex transform
+  if (fp_kind == real32) istat = cufftPlan1D(plan,n,CUFFT_C2C,1)
+  if (fp_kind == real64) istat = cufftPlan1D(plan,n,CUFFT_Z2Z,1)
+
+  ! forward transform out of place
+  istat = cufftExec(plan,cinput_d,coutput_d,CUFFT_FORWARD)
+
+  ! copy results back to host
+  coutput=coutput_d
+
+  print *," Transform from complex array"
+  do i=1,n
+     write(*,'(i2,1x,2(f8.4),2x,i2,2(f8.4))') &
+          i,cinput(i),kx(i),coutput(i)/n
+  end do
+
+  ! release memory on the host and on the device
+  deallocate(cinput,coutput,kx,cinput_d,coutput_d)
+
+  ! destroy the plan
+  istat = cufftDestroy(plan)
+
+end program fft_test_c2c

@@ -1,0 +1,18 @@
+program testsort
+  use thrust
+  implicit none
+  integer, parameter :: n = 10
+  real :: cpuData(n)
+  real, device :: gpuData(n)
+
+  call random_number(cpuData)
+  cpuData(5)=100.
+
+  print *, "Before sorting", cpuData
+
+  gpuData=cpuData
+  call thrustsort(gpuData, size(gpuData))
+  cpuData=gpuData
+
+  print *, "After sorting", cpuData
+end program testsort

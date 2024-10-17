@@ -1,0 +1,57 @@
+module m
+
+  interface
+     attributes(global) subroutine kernel(x, v) &
+          bind(C,name='Ckernel')
+       use iso_c_binding
+       real(c_float), device :: x(*)
+       real(c_float), value :: v
+     end subroutine kernel
+  end interface
+
+  interface
+     attributes(device) function devicefun(x) result(res) &
+          bind(C,name='Cdevicefun')
+       use iso_c_binding
+       real(c_float) :: res
+       real(c_float), value :: x
+     end function devicefun
+  end interface
+
+contains
+
+  attributes(global) subroutine Fkernel(x, v)
+    implicit none
+    real, device :: x(*)
+    real, value :: v
+    x(threadIdx%x) = devicefun(v)
+  end subroutine Fkernel
+    
+end module m
+
+program main
+  use m
+  implicit none
+  real :: x(1), f(1)
+  real, device :: x_d(1), f_d(1)
+  integer :: i
+
+  call kernel<<<1,1>>>(x_d, 1.0)
+  x = x_d
+  if (x(1) == 1.0) print *, 'Calling C Kernel -- OK'
+  
+  !$cuf kernel do <<<*,*>>>
+  do i = 1, 1
+     f_d(i) = devicefun(x_d(i))
+  end do
+  f = f_d
+  if (f(1) == 2.0) print *, 'CUF Kernel Calling C Function -- OK'  
+
+  call Fkernel<<<1,1>>>(x_d, 4.0)
+  x = x_d
+  if (x(1) == 8.0) print *, 'Fortran Kernel Calling C Function -- OK' 
+end program main
+
+
+
+  

@@ -1,0 +1,159 @@
+module blackscholes_m
+  use precision_m
+contains
+  
+  real(fp_kind)  function CND( d )
+    ! Cumulative Normal Distribution function
+    ! using Hasting's formula
+    implicit none
+    real(fp_kind), parameter :: A1 =  0.31938153_fp_kind
+    real(fp_kind), parameter :: A2 = -0.356563782_fp_kind
+    real(fp_kind), parameter :: A3 =  1.781477937_fp_kind
+    real(fp_kind), parameter :: A4 = -1.821255978_fp_kind
+    real(fp_kind), parameter :: A5 =  1.330274429_fp_kind
+    real(fp_kind) :: d, K, abs, exp, RSQRT2PI 
+    
+    K = 1.0_fp_kind/(1.0_fp_kind + 0.2316419_fp_kind * abs(d))
+    RSQRT2PI = 1._fp_kind/sqrt(8._fp_kind*atan(1._fp_kind))
+    CND = RSQRT2PI * exp( -0.5_fp_kind * d * d) *          &
+         (K * (A1 + K * (A2 + K * (A3 + K * (A4 + K * A5)))))
+    if( d .gt. 0._fp_kind ) CND = 1.0_fp_kind - CND
+    return
+  end function CND
+  
+  subroutine blackscholes(callResult, putResult, &
+       S, E, R, sigma, T)
+    ! Black-Scholes formula for call and put
+    ! S = asset price at time t
+    ! E = exercise (strike) price
+    ! sigma = volatility
+    ! R = interest rate
+    ! T = time to expiration
+    implicit none
+    real(fp_kind) :: callResult, putResult
+    real(fp_kind) :: S, E, R, sigma, T
+    real(fp_kind) :: sqrtT, d1, d2, log, exp, expRT
+    
+    if ( T > 0 ) then 
+       sqrtT = sqrt(T)
+       d1 = (log(S/E)+(R+0.5_fp_kind*sigma*sigma)*T) &
+            /(sigma*sqrtT)
+       d2 = d1 -sigma*sqrtT
+       expRT = exp( -R * T)
+       callResult = ( S * CND(d1) - E * expRT * CND(d2))
+       putResult = callResult + E * expRT - S 
+    else
+       callResult = max(S-E,0._fp_kind)
+       putResult  = max(E-S,0._fp_kind)
+    end if
+  end subroutine blackscholes
+end module blackscholes_m
+
+program  mc
+  use blackscholes_m
+  use curand
+  use cudafor
+  implicit none
+  real(fp_kind), allocatable, device :: deviceData(:), &
+       putValue(:),callValue(:)
+  real(fp_kind) :: S, E, R, sigma, T,Sfinal, &
+       call_price, put_price
+  real(fp_kind) ::  meanPut,meanCall, &
+       stddevPut, stddevCall, confidence
+  type(curandGenerator) :: gen
+  integer(kind=8) :: seed
+  integer :: i, n2, nargs, istat, N
+  type(cudaEvent) :: startEvent,stopEvent
+  real :: time
+  character*12 arg
+  
+  istat=cudaEventCreate(startEvent)
+  istat=cudaEventCreate(stopEvent)
+  
+  ! Number of samples
+  nargs=command_argument_count()
+  if ( nargs == 0 ) then
+     N = 1000000
+  else
+     call get_command_argument(1,arg)
+     read(arg,'(i)') N
+  endif
+  
+  S      = 5._fp_kind;       E = 4._fp_kind
+  sigma  = 0.3_fp_kind;      R = 0.05_fp_kind
+  T      = 1._fp_kind
+  
+  istat=cudaEventRecord(startEvent,0) !start timing
+  
+  !Allocate arrays on GPU
+  allocate (deviceData(N),putValue(N),callValue(N))
+  
+  if (fp_kind == singlePrecision) then
+     print *, " European option with random numbers"
+     print *, " in single precisionm using ",N," samples"
+  else
+     print *, " European option with random numbers"
+     print *, " in double precision using ",N," samples"
+  end if
+  
+  ! Create pseudonumber generator
+  istat = curandCreateGenerator(gen, CURAND_RNG_PSEUDO_DEFAULT)
+  
+  ! Set seed
+  seed=1234
+  istat= curandSetPseudoRandomGeneratorSeed( gen, seed)
+  
+  ! Generate N floats/doubles on device w/ normal distribution
+  !istat= curandGenerateNormal(gen, deviceData, N, &
+  !       0._fp_kind, 1._fp_kind)
+  istat= curandGenerate(gen, deviceData, N, &
+       0._fp_kind, 1._fp_kind)
+  
+  meanPut=0._fp_kind; meanCall=0._fp_kind
+  !$cuf kernel do <<<*,*>>>
+  do i=1,N
+     Sfinal= S*exp((R-0.5_fp_kind*sigma*sigma)*T &
+          +sigma*sqrt(T)*deviceData(i))
+     putValue(i) =exp (-R *T) * max (E-Sfinal,0._fp_kind)
+     callValue(i)=exp (-R *T) * max (Sfinal-E,0._fp_kind)
+     meanPut=meanPut+putValue(i)
+     meanCall=meanCall+callValue(i)
+  end do
+  meanPut=meanPut/N
+  meanCall=meanCall/N
+  
+  stddevPut=0._fp_kind; stddevCall=0._fp_kind
+  !$cuf kernel do <<<*,*>>>
+  do i=1,N
+     stddevPut= stddevPut + (putValue(i)-meanPut) **2
+     stddevCall= stddevCall + (callValue(i)-meanCall) **2
+  end do
+  stddevPut=sqrt(stddevPut/(N-1) )
+  stddevCall=sqrt(stddevCall/(N-1) )
+  
+  ! compute a reference solution using Black Scholes formula
+  call blackscholes(call_price,put_price,S,E,R,sigma,T)
+  
+  print *, "Montecarlo  value of put option  =", meanPut
+  print *, "BlackScholes value of put option =", put_price
+  print *, "Confidence interval of put option  = [", &
+       meanPut -1.96*stddevPut/sqrt(real(N)),",",&
+       meanPut +1.96*stddevPut/sqrt(real(N)),"]"
+  print *, "Montecarlo value of call option  =", meanCall
+  print *, "BlackScholes value of call option=", call_price
+  print *, "Confidence interval of call option  = [", &
+       meanCall -1.96*stddevCall/sqrt(real(N)),",",&
+       meanCall +1.96*stddevCall/sqrt(real(N)),"]"
+  
+  istat=cudaEventRecord(stopEvent,0)
+  istat=cudaEventSynchronize(stopEvent)
+  istat=cudaEventElapsedTime(time,startEvent,stopEvent)
+  
+  print *,"Elapsed time (ms) :",time
+
+  deallocate (deviceData,putValue,callValue)
+  
+  ! Destroy the generator
+  istat= curandDestroyGenerator(gen)
+  
+end program  mc

@@ -1,0 +1,33 @@
+module m
+contains
+  attributes(global) subroutine s1(raceCount, atomicCount)
+    implicit none
+    integer :: raceCount, atomicCount
+    integer :: tmp
+    integer, shared :: sharedCount
+
+    if (threadIdx%x == 1) sharedCount = 0
+    call syncthreads()
+    
+    raceCount = raceCount + 1
+    tmp = atomicAdd(sharedCount, 1)
+    call syncthreads()
+    
+    if (threadIdx%x == 1) tmp = atomicAdd(atomicCount, sharedCount)
+  end subroutine s1
+end module m
+
+program raceAndAtomicShared
+  use m
+  implicit none
+  integer, parameter :: nBlocks = 256, nThreads = 256
+  integer, device :: raceCount_d, atomicCount_d
+  integer :: raceCount, atomicCount
+
+  raceCount_d = 0
+  atomicCount_d = 0
+  call s1<<<nBlocks, nThreads>>>(raceCount_d, atomicCount_d)
+  raceCount = raceCount_d
+  atomicCount = atomicCount_d
+  print *, nBlocks*nThreads, raceCount, atomicCount 
+end program raceAndAtomicShared

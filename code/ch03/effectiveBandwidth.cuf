@@ -1,0 +1,55 @@
+module m
+  use, intrinsic :: iso_fortran_env
+  integer, parameter :: fpKind = real64
+contains
+  attributes(global) subroutine copy(lhs, rhs, n)
+    implicit none
+    real(fpKind) :: lhs(*)
+    real(fpKind) :: rhs(*)
+    integer, value :: n
+    integer :: i
+    i = blockDim%x * (blockIdx%x - 1) + threadIdx%x
+    if (i <= n) lhs(i) = rhs(i)
+  end subroutine copy
+end module m
+
+
+program stream
+  use cudafor
+  use m
+  implicit none
+  integer, parameter :: N = 32*1024*1024  
+  real(fpKind), device :: a_d(N), b_d(N)
+  integer :: nBlocks, blockSize
+  real :: time
+  integer(8) :: nBytes
+  type(cudaEvent) :: startEvent, stopEvent 
+  integer :: istat
+  
+  istat = cudaEventCreate(startEvent) 
+  istat = cudaEventCreate(stopEvent)   
+
+  blockSize = 256
+  nBlocks = (N-1)/blockSize+1
+  nBytes = 2 * sizeof(a_d)
+     
+  b_d = 1.0_fpKind
+  istat = cudaDeviceSynchronize()
+  istat = cudaEventRecord(startEvent, 0)
+  call copy<<<nBlocks, blockSize>>>(a_d, b_d, N)
+  istat = cudaEventRecord(stopEvent, 0)
+  istat = cudaEventSynchronize(stopEvent)
+  istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+
+  block
+    type(cudaDeviceProp) :: prop
+    istat = cudaGetDeviceProperties(prop, 0)
+    print "(A)", trim(prop%name)
+  end block
+  if (fpKind == real64) print "('real64')"
+  if (fpKind == real32) print "('real32')"
+  print "('Array size (bytes): ', i0)", sizeof(a_d)
+  print "('Copy effective bandwidth: ', f10.1)", &
+          nBytes/time/1.0E+6
+
+end program stream

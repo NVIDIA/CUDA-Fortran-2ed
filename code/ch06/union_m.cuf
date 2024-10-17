@@ -1,0 +1,35 @@
+module union
+
+  interface union
+     module procedure union_r4c4, union_r4dc4d
+  end interface union
+
+contains
+
+  subroutine union_r4c4(s, d_ptr)
+    use iso_c_binding
+    implicit none
+    real(4) :: s(:)
+    complex(4), pointer :: d_ptr(:)
+    type(c_ptr) :: s_cptr
+    integer :: d_shape(1)
+
+    d_shape(1) = size(s)/2   
+    s_cptr = transfer(loc(s), s_cptr)
+    call c_f_pointer(s_cptr, d_ptr, d_shape)
+  end subroutine union_r4c4
+
+  subroutine union_r4dc4d(s, d_ptr)
+    use cudafor
+    implicit none
+    real(4), device :: s(:)
+    complex(4), device, pointer :: d_ptr(:)
+    type(c_devptr) :: s_cptr
+    integer :: d_shape(1)
+
+    d_shape(1) = size(s)/2   
+    s_cptr = c_devloc(s)
+    call c_f_pointer(s_cptr, d_ptr, d_shape)
+  end subroutine union_r4dc4d
+  
+end module union

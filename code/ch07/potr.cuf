@@ -1,0 +1,89 @@
+program main
+  use cudaforEx
+  use cublas
+  use cusolverDN
+  implicit none
+  integer, parameter :: n=3
+  real(8) :: a(n,n), b(n)
+  real(8), device :: a_d(n,n), b_d(n)
+  integer, device :: devInfo_d
+  integer(8) :: wsSizeH, wsSizeD
+  integer(1), allocatable :: buffer(:) 
+  integer(1), device, allocatable :: buffer_d(:) 
+  integer, device :: info_d
+  integer :: istat, i
+
+  type(cusolverDnHandle) :: h
+  type(cusolverDnParams) :: params
+
+  a = reshape([25, 15, -5, 15, 18, 0, -5, 0, 11], shape=[3,3])
+  print *, 'A:'
+  do i = 1, n
+     print *, a(i,:)
+  enddo
+  a_d = a
+  b = [40, 51, 28]
+  b_d = b
+  print *, 'b:'
+  print *, b
+  
+  istat = cusolverDnCreate(h)
+  istat = cusolverDnCreateParams(params)
+  istat = cusolverDnXpotrf_buffersize(handle = h, &
+       params = params, &
+       uplo = CUBLAS_FILL_MODE_UPPER, &
+       n = n, &
+       dataTypeA = cudaDataType(cudaforGetDataType(a_d)), &
+       A = a_d, &
+       lda = n, &
+       computeType = cudaDataType(cudaforGetDataType(a_d)), &
+       workspaceinBytesOnDevice = wsSizeD, &
+       workspaceinBytesOnHost = wsSizeH)
+  
+  allocate(buffer(wsSizeH), buffer_d(wsSizeD))
+
+  istat = cusolverDnXpotrf(handle = h, &
+       params = params, &
+       uplo = CUBLAS_FILL_MODE_UPPER, &
+       n = n, &
+       dataTypeA = cudaDataType(cudaforGetDataType(a_d)), &
+       A = a_d, &
+       lda = n, &
+       computeType = cudaDataType(cudaforGetDataType(a_d)), &
+       bufferOnDevice = buffer_d, &
+       workspaceinBytesOnDevice = wsSizeD, &
+       bufferOnHost = buffer, &
+       workspaceinBytesOnHost = wsSizeH, &
+       devinfo = info_d)
+  
+  a = a_d
+
+  print *, 'Cholesky factorization:'
+  do i = 1, n
+     print *, a(i,:)
+  enddo
+
+  istat = cusolverDnXpotrs(handle = h, &
+       params = params, &
+       uplo = CUBLAS_FILL_MODE_UPPER, &
+       n = n, &
+       nrhs = 1, &
+       dataTypeA = cudaDataType(cudaforGetDataType(a_d)), &
+       A = a_d, &
+       lda = n, &
+       dataTypeB = cudaDataType(cudaforGetDataType(b_d)), &
+       B = b_d, &
+       ldb = n, &
+       devinfo = info_d)
+
+  b = b_d
+
+  print *, 'x:'
+  print *, b
+  
+  ! cleanup
+  
+  deallocate(buffer, buffer_d)
+  istat = cusolverDnDestroyParams(params)
+  istat = cusolverDnDestroy(h)
+end program main

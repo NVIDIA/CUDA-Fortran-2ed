@@ -1,0 +1,39 @@
+program defaultStreamVar
+  use cudafor
+  implicit none
+  integer, parameter :: n=100000
+  real :: a(n), b(n)
+  real, device :: a_d(n)
+  real, device, allocatable :: b_d(:)
+  integer(cuda_stream_kind) :: s1
+  integer :: istat, i
+  
+  istat = cudaStreamCreate(s1)
+
+  a = 1.0
+  allocate(b_d(n))
+
+  istat = cudaforSetDefaultStream(a_d, s1)
+  if (istat /= cudaSuccess) print *, 'a_d stream association error: ', &
+       cudaGetErrorString(istat)
+  istat = cudaforSetDefaultStream(b_d, s1)
+  if (istat /= cudaSuccess) print *, 'b_d stream association error: ', &
+       cudaGetErrorString(istat)
+  
+  a_d = 1.0
+  b_d = 1.0
+  
+  !$cuf kernel do <<<*,*>>>
+  do i = 1, n
+     a_d(i) = a_d(i) + b_d(i) + i
+  end do
+
+  print *, minval(a_d)  
+  print *, maxval(b_d)
+
+  a = a_d
+  b = b_d
+
+  istat = cudaStreamDestroy(s1)
+  deallocate(b_d)
+end program defaultStreamVar

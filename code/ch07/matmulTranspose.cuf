@@ -1,0 +1,33 @@
+program main
+  use cudafor
+  use cutensorEx
+  implicit none
+  integer, parameter :: m=3200, n=m, k=3200
+  real(8) :: a(m,k), b(k,n)
+  real(8) :: c(m,n), cref(m,n)
+  real(8), device :: a_d(m,k), b_d(k,n)
+  real(8), device :: c_d(m,n)
+  integer :: istat
+  
+  type(cudaDeviceProp) :: prop
+
+  istat = cudaGetDeviceProperties(prop, 0)
+  print "(' Device: ', a)", trim(prop%name)
+  print "(' m = ', i0, ', n = ', i0, ', k = ', i0)", m, n, k
+  
+  call random_number(a)
+  call random_number(b)
+
+  ! transpose(A*B) = tranpose(B)*transpose(A)
+  ! LHS on host
+  cref = matmul(a,b)
+  cref = transpose(cref)
+
+  ! RHS on device
+  a_d = a; b_d = b
+  c_d = matmul(transpose(b_d), transpose(a_d))
+  c = c_d
+  print *, 'maxval(abs(tr(AB)-tr(B)tr(A))): ', &
+       maxval(abs(cref-c))
+end program main
+  

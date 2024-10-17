@@ -1,0 +1,73 @@
+program main
+  use compact
+  use cudafor
+  implicit none
+  integer, parameter :: n=1024*1024*8
+  real(8) :: a(n), threshold
+  real(8), device :: a_d(n)
+  integer, device :: mask_d(n)
+  real(8), device, allocatable :: ac_d(:)
+  integer, device, allocatable :: ic_d(:)
+  real(8), allocatable :: ac(:), ach(:)
+  integer, allocatable :: ic(:), ich(:)
+  integer :: nc, nch, i, j, nerri, nerra, iter
+  real :: t1, t2
+
+
+  print *, 'Array size: ', n
+  print *, 'Block size: ', compact_tpb
+  
+  threshold = 0.5d0
+  call random_number(a)
+  a_d = a
+
+  mask_d = 0
+  !$cuf kernel do <<<*,*>>>
+  do i = 1, n
+     if (a_d(i) <= threshold) mask_d(i) = 1
+  enddo
+
+  call cpu_time(t1)
+  call compact(a_d, mask_d, n, ac_d, ic_d, nc)
+  call cpu_time(t2)
+
+  print *, 'elapsed time gpu:', t2-t1
+
+  allocate(ac(nc), ic(nc))
+  ac = ac_d
+  ic = ic_d
+
+  ! do on host
+
+  call cpu_time(t1)
+  nch = count(a <= threshold)
+  allocate(ach(nch), ich(nch))
+  j = 0
+  do i = 1, n
+     if (a(i) <= threshold) then
+        j = j+1
+        ach(j) = a(i)
+        ich(j) = i
+     end if
+     if (j == nch) exit
+  enddo
+  call cpu_time(t2)
+
+  print *, 'elapsed time host:', t2-t1
+
+  if (nc /= nch) then
+     print *, 'Error: nc from host and device: ', nch, nc
+  else
+     print *, 'nc: ', nc
+  end if
+
+  nerri = 0
+  nerra = 0
+  do i = 1, min(nc,nch)
+     if (ic(i) /= ich(i)) nerri = nerri+1
+     if (ac(i) /= ach(i)) nerra = nerra+1
+  end do
+  print *, 'Errors in index array: ', nerri
+  print *, 'Errors in data array: ', nerra
+
+end program main

@@ -1,0 +1,40 @@
+program sgemmLegacy
+  use cublas
+  use cudafor
+  implicit none
+  integer, parameter :: m = 100, n = 100, k = 100
+  real :: a(m,k), b(k,n), c(m,n)
+  real, device :: a_d(m,k), b_d(k,n), c_d(m,n)
+  real, parameter :: alpha = 1.0, beta = 0.0
+  integer :: lda = m, ldb = k, ldc = m
+  integer :: istat
+
+  a = 1.0; b = 2.0; c = 0.0
+
+  call sgemm('n', 'n', m, n, k, &
+       alpha, a, lda, b, ldb, beta, c, ldc)
+  print *, 'sgemm(host data) error =', &
+       maxval(c-k*2.0)
+  
+  istat = cublasInit()
+  if (istat /= CUBLAS_STATUS_SUCCESS) &
+       print *, 'Error initializing CUBLAS'
+  
+  a_d = a; b_d = b; c_d = 0.0
+  
+  call cublasSgemm('n', 'n', m, n, k, &
+       alpha, a_d, lda, b_d, ldb, beta, c_d, ldc)
+  c = c_d
+  print *, 'cublasSgemm error =', maxval(c-k*2.0)
+
+  c_d = 0.0
+  call sgemm('n', 'n', m, n, k, &
+       alpha, a_d, lda, b_d, ldb, beta, c_d, ldc)
+  c = c_d
+  print *, 'sgemm(device data) error =', &
+       maxval(c-k*2.0)
+
+  istat = cublasShutdown()
+  if (istat /= CUBLAS_STATUS_SUCCESS) &
+       print *, 'Error shutting down CUBLAS'
+end program sgemmLegacy

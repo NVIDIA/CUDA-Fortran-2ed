@@ -1,0 +1,17 @@
+program main
+  use nvtx
+  implicit none
+  character(len=4) :: nchar
+  integer :: n
+
+  call nvtxStartRange("Outer Label")
+
+  do n = 1, 4
+     write(nchar, '(i4)') n
+     call nvtxStartRange('Label '//nchar,n)
+     call sleep(1)
+     call nvtxEndRange()
+  enddo
+
+  call nvtxEndRange()
+end program main

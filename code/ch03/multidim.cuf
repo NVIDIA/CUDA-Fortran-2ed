@@ -1,0 +1,41 @@
+module m
+contains
+  attributes(global) subroutine increment(a, n1, n2, b)
+    implicit none
+    integer :: a(n1,n2)
+    integer, value :: n1, n2, b
+    integer :: i, j
+
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    j = (blockIdx%y-1)*blockDim%y + threadIdx%y
+    if (i<=n1 .and. j<=n2) a(i,j) = a(i,j) + b
+  end subroutine increment
+end module m
+
+
+
+program multidim
+  use cudafor
+  use m
+  implicit none
+  integer, parameter :: nx=1024, ny=512
+  integer :: a(nx,ny), b 
+  integer, device :: a_d(nx,ny)
+  type(dim3) :: grid, tBlock 
+
+  a = 1
+  b = 3
+  
+  tBlock = dim3(32,8,1)
+  grid = dim3((nx-1)/tBlock%x+1, &
+              (ny-1)/tBlock%y+1, 1)
+  a_d = a
+  call increment<<<grid,tBlock>>>(a_d, nx, ny, b)
+  a = a_d
+
+  if (any(a /= 4)) then
+     print *, '**** Program Failed ****'
+  else
+     print *, 'Program Passed'
+  endif
+end program multidim

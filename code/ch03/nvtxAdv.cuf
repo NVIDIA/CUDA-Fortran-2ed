@@ -1,0 +1,18 @@
+program main
+  use nvtx
+  implicit none
+  type(nvtxRangeId) :: id1, id2
+  character(len=4) :: nchar 
+  integer :: n
+
+  id1 = nvtxRangeStart("Outer label")  
+
+  do n = 1, 4
+     write(nchar, '(i4)') n
+     id2 = nvtxRangeStart('Label '//nchar)
+     call sleep(1)
+     call nvtxRangeEnd(id2)
+  enddo
+  
+  call nvtxRangeEnd(id1)  
+end program main

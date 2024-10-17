@@ -1,0 +1,87 @@
+module m
+contains
+
+  attributes(global) subroutine r1(x, n)
+    implicit none
+    real :: x(*)
+    integer, value :: n
+    integer :: i
+    i = threadIdx%x + (blockIdx%x-1)*blockDim%x
+    if (i <= n) x(i) = i
+  end subroutine r1
+    
+  ! can use ignore_tkr if you have access to the routine
+  attributes(global) subroutine c1(x, n)
+    implicit none
+    !dir$ ignore_tkr x
+    complex :: x(*)
+    integer, value :: n
+    integer :: i
+    i = threadIdx%x + (blockIdx%x-1)*blockDim%x
+    if (i <= n) x(i) = cmplx(-i, -1.0)
+  end subroutine c1
+    
+  attributes(global) subroutine c2(x, n)
+    implicit none
+    complex :: x(*)
+    integer, value :: n
+    integer :: i
+    i = threadIdx%x + (blockIdx%x-1)*blockDim%x
+    if (i <= n) x(i) = cmplx(-i*2, -2.0)
+  end subroutine c2
+  
+  ! use a wrapper with ignore_tkr
+  subroutine wrap_c2(x, n, g, b)
+    implicit none
+    !dir$ ignore_tkr x
+    complex, device :: x(*)
+    integer, value :: n, g, b
+    call c2<<<g,b>>>(x, n)
+  end subroutine wrap_c2
+
+end module m
+
+
+program main
+  use m
+  use union
+  use cudafor
+  implicit none
+  integer, parameter :: blks=2, tpb = 16, n = blks*tpb
+  real :: r(n)
+  real, device :: r_d(n)
+  complex, device, pointer :: ptr(:) 
+  integer :: i
+
+  ! use r_d as real
+  call r1<<<blks, tpb>>>(r_d, n)
+  r = r_d
+  print *, r(1:4)  
+  
+  ! OK since ignore_tkr is in the kernel
+  call c1<<<blks/2,tpb>>>(r_d, n/2)
+  r = r_d
+  print *, r(1:4)
+
+  ! OK since ignore_tkr is in the wrapper to c2
+  call wrap_c2(r_d, n/2, blks/2, tpb)  
+  r = r_d
+  print *, r(1:4)
+
+  r_d = 0.0
+
+  call union(r_d, ptr)
+  ! OK since ptr is complex
+  call c2<<<blks/2,tpb>>>(ptr, n/2)
+  r = r_d
+  print *, r(1:4)
+
+  !for use in CUF kernel as a complex, use pointer
+  !$cuf kernel do
+  do i = 1, n/2
+     ptr(i) = conjg(ptr(i))
+  end do
+  r = r_d
+  print *, r(1:4)
+
+end program main

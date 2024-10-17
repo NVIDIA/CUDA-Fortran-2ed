@@ -1,0 +1,82 @@
+module m
+contains
+  attributes(global) subroutine automaticDSM(a, b, n)
+    implicit none
+    real(8) :: a(n)
+    integer :: b(n)
+    integer, value :: n
+
+    real(8), shared :: sa(n)
+    integer, shared :: sb(n)
+    integer :: t, tr
+    
+    t = threadIdx%x
+    tr = n-t+1
+    
+    sa(t) = a(t)
+    sb(t) = b(t)
+    call syncthreads()
+    a(t) = sa(tr)
+    b(t) = sb(tr)
+  end subroutine automaticDSM
+
+  attributes(global) subroutine assumedSizeDSM(a, b)
+    implicit none
+    real(8) :: a(*)
+    integer :: b(*)
+
+    real(8), shared :: sa(*)
+    integer, shared :: sb(*)
+    integer :: t, tr, offset
+    
+    t = threadIdx%x
+    tr = blockDim%x-t+1
+    offset = blockDim%x*sizeof(sa(1))/sizeof(sb(1))
+    
+    sa(tr) = a(t)
+    sb(offset+tr) = b(t)
+    call syncthreads()
+    a(t) = sa(t)
+    b(t) = sb(offset+t)
+  end subroutine assumedSizeDSM
+end module m
+
+program main
+  use m
+  implicit none
+  integer, parameter :: n = 512
+  real(8) :: a(n)
+  real(8), device :: a_d(n)
+  integer :: b(n)
+  integer, device :: b_d(n)
+  integer :: i, nerr
+  
+  do i = 1, n
+     a(i) = i
+     b(i) = 10*i
+  enddo
+
+  a_d = a; b_d = b
+  call automaticDSM<<<1,n,n*12>>>(a_d, b_d, n)
+  a = a_d; b = b_d
+
+  nerr = 0
+  do i = 1, n
+     if (a(i) /= n-i+1) nerr = nerr+1
+     if (b(i) /= 10*(n-i+1)) nerr = nerr+1
+  end do
+
+  print *, 'automaticDSM errors: ', nerr
+
+  call assumedSizeDSM<<<1,n,n*12>>>(a_d, b_d)
+  a = a_d; b = b_d
+
+  nerr = 0
+  do i = 1, n
+     if (a(i) /= i) nerr = nerr+1
+     if (b(i) /= 10*i) nerr = nerr+1
+  end do
+  
+  print *, 'assumeSizeDSM errors: ', nerr
+end program main
+  

@@ -1,0 +1,50 @@
+OBJS = minimal p2pAccess directTransfer p2pBandwidth \
+       transposeP2P mpiDevices assignDevice transposeMPI transposeCAMPI
+
+# section 8.1
+
+minimal: minimal.cuf
+	nvfortran -o $@ $<
+
+# section 8.1.1.1
+
+p2pAccess: p2pAccess.cuf
+	nvfortran -o $@ $<
+
+# section 8.1.2
+
+directTransfer: directTransfer.cuf
+	nvfortran -o $@ $<
+
+p2pBandwidth: p2pBandwidth.cuf
+	nvfortran -o $@ $<
+
+# section 8.1.3
+
+wallclock.o: wallclock.c
+	nvc -c $<
+
+transposeP2P: timing.f90 transposeP2P.cuf wallclock.o
+	nvfortran -o $@ $^
+
+# section 8.2.1
+
+mpiDevices: mpiDevices.cuf
+	mpif90 -o $@ $<
+
+assignDevice: mpiDeviceUtil.cuf assignDevice.cuf
+	mpif90 -o $@ $^
+
+# section 8.2.2
+
+transposeMPI: mpiDeviceUtil.cuf transposeMPI.cuf
+	mpif90 -o $@ $^
+
+transposeCAMPI: mpiDeviceUtil.cuf transposeCAMPI.cuf
+	mpif90 -o $@ $^
+
+
+
+clean:
+	rm -rf $(OBJS) *.o *.mod *~
+

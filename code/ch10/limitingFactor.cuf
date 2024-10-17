@@ -1,0 +1,345 @@
+module lfDerivatives_m
+  use cudafor
+  use precision_m
+
+  integer, parameter :: mx = 64, my = 64, mz = 64
+  integer, parameter :: nPencils = 4
+  
+  type(dim3) :: grid(3), tBlock(3)
+  real(fp_kind), constant :: ax_c, bx_c, cx_c, dx_c
+ 
+contains
+
+  ! host routine to set constant data
+
+  subroutine setDerivativeParameters()
+
+    implicit none
+
+    real(fp_kind) :: dsinv(3)
+
+    ! check to make sure dimensions are multiples of nPencils
+    if (mod(my,nPencils) /= 0) then
+       write(*,*) '"my" must be a multiple of nPencils'
+       stop
+    end if
+
+    if (mod(mx,nPencils) /= 0) then
+       write(*,*) '"mx" must be a multiple of nPencils', &
+            ' (for y-deriv)'
+       stop
+    end if
+
+    if (mod(mz,nPencils) /= 0) then
+       write(*,*) '"mz" must be a multiple of nPencils', &
+            ' (for z-deriv)'
+       stop
+    end if
+
+    ! stencil weights (for unit length problem, ds^{-1})
+
+    dsinv(1) = real(mx-1)
+    ax_c =  4./  5. * dsinv(1)
+    bx_c = -1./  5. * dsinv(1)
+    cx_c =  4./105. * dsinv(1)
+    dx_c = -1./280. * dsinv(1)
+
+    ! Execution configurations
+
+    grid(1) = dim3(my/nPencils,mz,1)
+    tBlock(1) = dim3(mx,nPencils,1)
+
+  end subroutine setDerivativeParameters
+
+  ! ------------
+  ! x derivative
+  ! ------------
+
+  attributes(global) subroutine derivative_x(f, df)
+    implicit none
+
+    real(fp_kind), intent(in) :: f(mx,my,mz)
+    real(fp_kind), intent(out) :: df(mx,my,mz)
+
+    real(fp_kind), shared :: f_s(-3:mx+4,nPencils)
+
+    integer :: i,j,k,j_l
+
+    i = threadIdx%x
+    j = (blockIdx%x-1)*blockDim%y + threadIdx%y
+    ! j_l is local variant of j for accessing shared memory
+    j_l = threadIdx%y            
+    k = blockIdx%y
+
+    f_s(i,j_l) = f(i,j,k)
+
+    call syncthreads()
+
+    ! fill in periodic images in shared memory array 
+
+    if (i <= 4) then
+       f_s(i-4, j_l) = f_s(mx+i-5,j_l) 
+       f_s(mx+i,j_l) = f_s(i+1,   j_l)   
+    endif
+
+    call syncthreads()
+
+    df(i,j,k) = &
+         (ax_c *( f_s(i+1,j_l) - f_s(i-1,j_l) )   &
+         +bx_c *( f_s(i+2,j_l) - f_s(i-2,j_l) )   &
+         +cx_c *( f_s(i+3,j_l) - f_s(i-3,j_l) )   &
+         +dx_c *( f_s(i+4,j_l) - f_s(i-4,j_l) ))
+ 
+  end subroutine derivative_x
+
+
+
+  attributes(global) subroutine derivative_mem(f, df)
+    implicit none
+
+    real(fp_kind), intent(in) :: f(mx,my,mz)
+    real(fp_kind), intent(out) :: df(mx,my,mz)
+
+    real(fp_kind), shared :: f_s(-3:mx+4,nPencils)
+
+    integer :: i,j,k,j_l
+
+    i = threadIdx%x
+    j = (blockIdx%x-1)*blockDim%y + threadIdx%y
+    ! j_l is local variant of j for accessing shared memory
+    j_l = threadIdx%y            
+    k = blockIdx%y
+
+    f_s(i,j_l) = f(i,j,k)
+
+    call syncthreads()
+
+    ! fill in periodic images in shared memory array 
+
+    if (i <= 4) then
+       f_s(i-4, j_l) = f_s(mx+i-5,j_l) 
+       f_s(mx+i,j_l) = f_s(i+1,   j_l)   
+    endif
+
+    call syncthreads()
+
+    df(i,j,k) = f_s(i,j_l)
+ 
+  end subroutine derivative_mem
+
+
+
+  attributes(global) subroutine derivative_gmem(f, df)
+    implicit none
+
+    real(fp_kind), intent(in) :: f(mx,my,mz)
+    real(fp_kind), intent(out) :: df(mx,my,mz)
+
+    real(fp_kind), shared :: f_s(-3:mx+4,nPencils)
+
+    integer :: i,j,k,j_l
+
+    i = threadIdx%x
+    j = (blockIdx%x-1)*blockDim%y + threadIdx%y
+    ! j_l is local variant of j for accessing shared memory
+    j_l = threadIdx%y            
+    k = blockIdx%y
+
+    f_s(i,j_l) = f(i,j,k)
+    df(i,j,k) = f_s(i,j_l)
+ 
+  end subroutine derivative_gmem
+
+
+
+  attributes(global) subroutine derivative_math(f, df, val)
+    implicit none
+
+    real(fp_kind), intent(in) :: f(mx,my,mz)
+    real(fp_kind), intent(out) :: df(mx,my,mz)
+    integer, value :: val
+    real(fp_kind) :: temp
+
+    real(fp_kind), shared :: f_s(-3:mx+4,nPencils)
+
+    integer :: i,j,k,j_l
+
+    i = threadIdx%x
+    j = (blockIdx%x-1)*blockDim%y + threadIdx%y
+    ! j_l is local variant of j for accessing shared memory
+    j_l = threadIdx%y            
+    k = blockIdx%y
+
+    temp = &
+         (ax_c *( f_s(i+1,j_l) - f_s(i-1,j_l) )   &
+         +bx_c *( f_s(i+2,j_l) - f_s(i-2,j_l) )   &
+         +cx_c *( f_s(i+3,j_l) - f_s(i-3,j_l) )   &
+         +dx_c *( f_s(i+4,j_l) - f_s(i-4,j_l) ))
+    
+    if (val*temp == 1) df(i,j,k) = temp
+    
+  end subroutine derivative_math
+
+
+end module lfDerivatives_m
+
+
+
+program derivativeLimitingFactor
+  use cudafor
+  use precision_m
+  use lfDerivatives_m
+  
+  implicit none
+
+  real(fp_kind), parameter :: fx = 1.0, fy = 1.0, fz = 1.0
+  integer, parameter :: nReps = 20
+
+  real(fp_kind) :: f(mx,my,mz), df(mx,my,mz), sol(mx,my,mz)
+  real(fp_kind), device :: f_d(mx,my,mz), df_d(mx,my,mz)
+  real(fp_kind) :: twopi, error, maxError
+  type(cudaEvent) :: startEvent, stopEvent
+  type(cudaDeviceProp) :: prop
+  
+  real :: time
+  integer :: i, j, k, istat
+
+  ! Print device and precision
+
+  istat = cudaGetDeviceProperties(prop, 0)
+  write(*,"(/,'Device Name: ',a)") trim(prop%name)
+  write(*,"('Compute Capability: ',i0,'.',i0)") &
+       prop%major, prop%minor
+  if (fp_kind == real32) then
+     write(*,"('Single Precision')")
+  else
+     write(*,"('Double Precision')")
+  end if
+
+  ! initialize
+
+  twopi = 8.*atan(1.d0)
+  call setDerivativeParameters()
+
+  istat = cudaEventCreate(startEvent)
+  istat = cudaEventCreate(stopEvent)
+
+  ! x-derivativ base
+    
+  do i = 1, mx
+     f(i,:,:) = cos(fx*twopi*(i-1.)/(mx-1))
+  enddo
+  f_d = f
+  df_d = 0
+
+  call derivative_x<<<grid(1),tBlock(1)>>>(f_d, df_d)
+  istat = cudaEventRecord(startEvent,0)
+  do i = 1, nReps
+     call derivative_x<<<grid(1),tBlock(1)>>>(f_d, df_d)
+  enddo
+  istat = cudaEventRecord(stopEvent,0)
+  istat = cudaEventSynchronize(stopEvent)
+  istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+
+  df = df_d
+  
+  do i = 1, mx
+     sol(i,:,:) = -fx*twopi*sin(fx*twopi*(i-1.)/(mx-1))
+  enddo
+  
+  error = sqrt(sum((sol-df)**2)/(mx*my*mz))
+  maxError = maxval(abs(sol-df))
+
+  write(*,"(/,'x derivative with x-y tile: ', &
+       i0, 'x', i0)") mx, nPencils
+  write(*,*) '  RMS error: ', error
+  write(*,*) '  MAX error: ', maxError
+  write(*,*) '  Average time (ms): ', time/nReps
+  write(*,*) '  Mem Bandwidth (GB/s): ', &
+       2.0*1.e-6*sizeof(f)/(time/nReps)
+
+  ! x-derivativ mem
+    
+  call derivative_mem<<<grid(1),tBlock(1)>>>(f_d, df_d)
+  istat = cudaEventRecord(startEvent,0)
+  do i = 1, nReps
+     call derivative_mem<<<grid(1),tBlock(1)>>>(f_d, df_d)
+  enddo
+  istat = cudaEventRecord(stopEvent,0)
+  istat = cudaEventSynchronize(stopEvent)
+  istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+
+  df = df_d
+  
+  do i = 1, mx
+     sol(i,:,:) = -fx*twopi*sin(fx*twopi*(i-1.)/(mx-1))
+  enddo
+  
+  error = sqrt(sum((sol-df)**2)/(mx*my*mz))
+  maxError = maxval(abs(sol-df))
+
+  write(*,"(/,'x derivative mem with x-y tile: ', &
+       i0, 'x', i0)") mx, nPencils
+  write(*,*) '  RMS error: ', error
+  write(*,*) '  MAX error: ', maxError
+  write(*,*) '  Average time (ms): ', time/nReps
+  write(*,*) '  Mem Bandwidth (GB/s): ', &
+       2.0*1.e-6*sizeof(f)/(time/nReps)
+
+  ! x-derivativ gmem
+    
+  call derivative_gmem<<<grid(1),tBlock(1)>>>(f_d, df_d)
+  istat = cudaEventRecord(startEvent,0)
+  do i = 1, nReps
+     call derivative_gmem<<<grid(1),tBlock(1)>>>(f_d, df_d)
+  enddo
+  istat = cudaEventRecord(stopEvent,0)
+  istat = cudaEventSynchronize(stopEvent)
+  istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+
+  df = df_d
+  
+  do i = 1, mx
+     sol(i,:,:) = -fx*twopi*sin(fx*twopi*(i-1.)/(mx-1))
+  enddo
+  
+  error = sqrt(sum((sol-df)**2)/(mx*my*mz))
+  maxError = maxval(abs(sol-df))
+
+  write(*,"(/,'x derivative gmem with x-y tile: ', &
+       i0, 'x', i0)") mx, nPencils
+  write(*,*) '  RMS error: ', error
+  write(*,*) '  MAX error: ', maxError
+  write(*,*) '  Average time (ms): ', time/nReps
+  write(*,*) '  Mem Bandwidth (GB/s): ', &
+       2.0*1.e-6*sizeof(f)/(time/nReps)
+
+  ! x-derivativ math
+    
+  call derivative_math<<<grid(1),tBlock(1)>>>(f_d, df_d, 0)
+  istat = cudaEventRecord(startEvent,0)
+  do i = 1, nReps
+     call derivative_math<<<grid(1),tBlock(1)>>>(f_d, df_d, 0)
+  enddo
+  istat = cudaEventRecord(stopEvent,0)
+  istat = cudaEventSynchronize(stopEvent)
+  istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+
+  df = df_d
+  
+  do i = 1, mx
+     sol(i,:,:) = -fx*twopi*sin(fx*twopi*(i-1.)/(mx-1))
+  enddo
+  
+  error = sqrt(sum((sol-df)**2)/(mx*my*mz))
+  maxError = maxval(abs(sol-df))
+
+  write(*,"(/,'x derivative math with x-y tile: ', &
+       i0, 'x', i0)") mx, nPencils
+  write(*,*) '  RMS error: ', error
+  write(*,*) '  MAX error: ', maxError
+  write(*,*) '  Average time (ms): ', time/nReps
+  write(*,*) '  Mem Bandwidth (GB/s): ', &
+       2.0*1.e-6*sizeof(f)/(time/nReps)
+
+end program derivativeLimitingFactor

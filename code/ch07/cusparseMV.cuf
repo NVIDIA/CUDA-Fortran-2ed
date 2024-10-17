@@ -1,0 +1,127 @@
+program sparseMatVec
+  use cudafor
+  use cusparse
+
+  implicit none
+
+  integer, parameter :: n = 5   ! # rows/cols in matrix
+  integer, parameter :: nnz = 5 ! # nonzeros in matrix
+
+  type(cusparseHandle) :: h
+
+  ! CSR matrix
+  type(cusparseSpMatDescr) :: descrA
+  real(4), device :: csrValues_d(nnz) 
+  integer(4), device :: csrRowOffsets_d(n+1), csrColInd_d(nnz)
+
+  ! dense vectors
+  type(cusparseDnVecDescr) :: descrX, descrY
+  real, device :: x_d(n), y_d(n)
+  real :: y(n)
+  
+  ! parameters
+  real(4) :: alpha = 1.0, beta = 0.0
+
+  integer :: status, i
+
+  ! initalize cusparse  
+  status = cusparseCreate(h)
+
+  ! CSR representation for upper circular shift matrix
+  csrValues_d = 1.0
+  csrColInd_d = [2, 3, 4, 5, 1]
+  csrRowOffsets_d = [1, 2, 3, 4, 5, 6]
+
+  ! vectors
+  x_d = [11.0, 12.0, 13.0, 14.0, 15.0]
+  y_d = 0.0
+
+  y = x_d
+  print *, 'Original vector' 
+  print "(5(1x,f7.2))", y
+
+  ! initialize sparse matrix descriptor A in CSR format
+  status = cusparseCreateCsr(descr = descrA, &
+       rows = n, &
+       cols = n, &
+       nnz = nnz, &
+       csrRowOffsets = csrRowOffsets_d, &
+       csrColInd = csrColInd_d, &
+       csrValues = csrValues_d, &
+       csrRowOffsetsType = CUSPARSE_INDEX_32I, &
+       csrColIndType = CUSPARSE_INDEX_32I, &
+       idxBase = CUSPARSE_INDEX_BASE_ONE, &
+       valueType = CUDA_R_32F)
+  
+  ! initialize the dense vector descriptors for X and Y
+  status = cusparseCreateDnVec(descrX, n, x_d, valueType = CUDA_R_32F)
+  status = cusparseCreateDnVec(descrY, n, y_d, valueType = CUDA_R_32F)
+
+  ! y = alpha*A*x + beta*y
+  
+  block
+    integer(8) :: bufferSize
+    integer(1), allocatable, device :: buffer_d(:)
+    
+    status = cusparseSpMV_buffersize(h, &
+         CUSPARSE_OPERATION_NON_TRANSPOSE, &
+         alpha, descrA, descrX, beta, descrY, &
+         CUDA_R_32F, &
+         CUSPARSE_SPMV_ALG_DEFAULT, &
+         buffersize)
+
+    allocate(buffer_d(buffersize))
+    
+    status = cusparseSpMV(h, &
+         CUSPARSE_OPERATION_NON_TRANSPOSE, &
+         alpha, descrA, descrX, beta, descrY, &
+         CUDA_R_32F, &
+         CUSPARSE_SPMV_ALG_DEFAULT, &
+         buffer_d)
+
+    deallocate(buffer_d)
+  end block
+
+  y = y_d
+  print *, 'Shifted vector' 
+  print "(5(1x,f7.2))", y
+
+  ! shift down and subtract original
+  ! x = alpha*(A')*y - x
+
+  beta = -1.0
+  
+  block
+    integer(8) :: bufferSize
+    integer(1), allocatable, device :: buffer_d(:)
+    
+    status = cusparseSpMV_buffersize(h, &
+         CUSPARSE_OPERATION_TRANSPOSE, &
+         alpha, descrA, descrY, beta, descrX, &
+         CUDA_R_32F, &
+         CUSPARSE_SPMV_ALG_DEFAULT, &
+         buffersize)
+
+    allocate(buffer_d(buffersize))
+    
+    status = cusparseSpMV(h, &
+         CUSPARSE_OPERATION_TRANSPOSE, &
+         alpha, descrA, descrY, beta, descrX, &
+         CUDA_R_32F, &
+         CUSPARSE_SPMV_ALG_DEFAULT, &
+         buffer_d)
+
+    deallocate(buffer_d)
+  end block
+
+  y = x_d
+  print *, 'Max error: ', maxval(abs(y)) 
+
+  ! cleanup
+
+  status = cusparseDestroySpMat(descrA)
+  status = cusparseDestroyDnVec(descrX)
+  status = cusparseDestroyDnVec(descrY)
+  status = cusparseDestroy(h)
+  
+end program sparseMatVec

@@ -1,0 +1,125 @@
+program HDtransfer
+
+  use cudafor
+  implicit none
+
+  integer, parameter :: nElements = 128*1024*1024
+
+  ! host arrays
+  real(4) :: a_pageable(nElements), b_pageable(nElements)   
+  real(4), allocatable, pinned :: a_pinned(:), b_pinned(:)
+
+  ! device arrays
+  real(4), device :: a_d(nElements)
+
+  ! events for timing
+  type (cudaEvent) :: startEvent, stopEvent
+
+  ! misc
+  type (cudaDeviceProp) :: prop
+  real(4) :: time
+  integer :: istat, n, i
+  logical :: pinnedFlag
+
+  ! allocate and initialize
+  do i = 1, nElements
+     a_pageable(i) = i
+  end do
+  b_pageable = 0.0
+
+  allocate(a_pinned(nElements), b_pinned(nElements), &
+       STAT=istat, PINNED=pinnedFlag)
+  if (istat /= 0) then
+     print *, 'Allocation of a_pinned/b_pinned failed'
+     pinnedFlag = .false.
+  else
+     if (.not. pinnedFlag) print *, 'Pinned allocation failed'
+  end if
+
+  if (pinnedFlag) then 
+     a_pinned = a_pageable
+     b_pinned = 0.0
+  endif
+
+  istat = cudaEventCreate(startEvent)
+  istat = cudaEventCreate(stopEvent)
+
+  ! output device info and transfer size
+  istat = cudaGetDeviceProperties(prop, 0)
+
+  print "(/, 'Device: ', a)", trim(prop%name)
+
+  ! pageable data transfers
+  print "(/, 'Pageable transfers')"
+  print *, 'size (KB)      H2D (GB/s)        D2H (GB/s)'
+
+  n = 1024
+  do
+     if (n > nElements) exit
+     write(*,'(i8)', advance='no') n*4/1024
+
+     istat = cudaEventRecord(startEvent, 0)
+     a_d(1:n) = a_pageable(1:n)
+     istat = cudaEventRecord(stopEvent, 0)
+     istat = cudaEventSynchronize(stopEvent)
+  
+     istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+     write(*,"(f15.2)", advance='no') n*4/time/1.e+6
+
+     istat = cudaEventRecord(startEvent, 0)
+     b_pageable(1:n) = a_d(1:n)
+     istat = cudaEventRecord(stopEvent, 0)
+     istat = cudaEventSynchronize(stopEvent)
+  
+     istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+     print "(3x,f15.2)", n*4/time/1.e+6
+
+     if (any(a_pageable(1:n) /= b_pageable(1:n))) &
+          print *, '*** Pageable transfers failed ***'
+
+     n = n*2
+  enddo
+
+  ! pinned data transfers
+
+  if (pinnedFlag) then
+     print "(/, 'Pinned transfers')"
+     print *, 'size (KB)      H2D (GB/s)        D2H (GB/s)'
+
+     n = 1024
+     do
+        if (n > nElements) exit
+        write(*,"(i8)", advance='no') n*4/1024
+
+
+        istat = cudaEventRecord(startEvent, 0)
+        a_d(1:n) = a_pinned(1:n)
+        istat = cudaEventRecord(stopEvent, 0)
+        istat = cudaEventSynchronize(stopEvent)
+  
+        istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+        write(*,"(f15.2)", advance='no') n*4/time/1.e+6
+
+        istat = cudaEventRecord(startEvent, 0)
+        b_pinned(1:n) = a_d(1:n)
+        istat = cudaEventRecord(stopEvent, 0)
+        istat = cudaEventSynchronize(stopEvent)
+        
+        istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+        print "(3x,f15.2)", n*4/time/1.e+6
+
+        if (any(a_pinned(1:n) /= b_pinned(1:n))) &
+             print *, '*** Pinned transfers failed ***' 
+
+        n = n*2
+     end do
+
+  end if
+ 
+  ! cleanup
+  if (allocated(a_pinned)) deallocate(a_pinned)
+  if (allocated(b_pinned)) deallocate(b_pinned)
+  istat = cudaEventDestroy(startEvent)
+  istat = cudaEventDestroy(stopEvent)
+
+end program HDtransfer

@@ -1,0 +1,134 @@
+module cusparseEx
+  use cusparse
+
+  interface cusparseCreateCsr
+     module procedure :: &
+          cusparseCreateCsr_abr
+  end interface cusparseCreateCsr
+
+  interface cusparseCreateDnVec
+     module procedure :: &
+          cusparseCreateDnVec_abr
+  end interface cusparseCreateDnVec
+
+  interface cusparseSpMV
+     module procedure :: &
+          cusparseSpMV_abr
+  end interface cusparseSpMV
+
+contains
+
+  function cusparseGetIndexType(x) result(res)
+    use cusparse
+    implicit none
+    !dir$ ignore_tkr (rd) x
+    class(*) :: x
+    integer :: res
+    select type(x)
+    type is (integer(4))
+       res = CUSPARSE_INDEX_32I
+    type is (integer(8))
+       res = CUSPARSE_INDEX_64I
+    class default
+       res = -1
+    end select
+  end function cusparseGetIndexType
+  
+  ! cusparseCreateScr abridged interface
+  
+  function cusparseCreateCsr_abr(descr, cols, &
+       csrRowOffsets_d, csrColInd_d, csrValues_d, idxBase) &
+       result(status)
+    use cudaforEx
+    use cusparse
+    implicit none
+    type(cusparseSpMatDescr) :: descr
+    integer(4) :: cols
+    class(*), device :: csrRowOffsets_d(:), csrColInd_d(:)
+    class(*), device :: csrValues_d(:)
+    integer, optional :: idxBase
+    integer :: status
+    
+    integer :: rows, nnz
+    integer :: idxBaseLocal = CUSPARSE_INDEX_BASE_ONE
+
+    if (present(idxBase)) idxBaseLocal = idxBase
+
+    rows = size(csrRowOffsets_d)-1
+    nnz = size(csrValues_d)
+
+    status = cuSparseCreateCsr(descr, &
+       rows, cols, nnz, &
+       csrRowOffsets_d, csrColInd_d, csrValues_d, &
+       cusparseGetIndexType(csrRowOffsets_d), &
+       cusparseGetIndexType(csrColInd_d), &
+       idxBaseLocal, &
+       cudaforGetDataType(csrValues_d))
+  end function cusparseCreateCsr_abr
+
+  ! cusparseCreateDnVec abridged call
+
+  function cusparseCreateDnVec_abr(descr, x_d) result(status)
+    use cudaforEx
+    use cusparse
+    implicit none
+    type(cusparseDnVecDescr) :: descr
+    class(*), device :: x_d(:)
+    integer :: status
+
+    status = cusparseCreateDnVec(descr, &
+         size(x_d), x_d, cudaforGetDataType(x_d))
+  end function cusparseCreateDnVec_abr
+
+  ! cusparseSpMV abridged call
+
+  function cusparseSpMV_abr(h, opA, alpha, A, x, beta, y, alg, buffer) &
+       result(status)
+    use cudaforEx
+    use cusparse
+    implicit none
+    type(cusparseHandle) :: h
+    type(cusparseSpMatDescr) :: A
+    integer :: opA
+    type(cusparseDnVecDescr) :: x, y
+    class(*) :: alpha, beta
+    integer, optional :: alg
+    integer(1), device, optional :: buffer(*)
+    integer :: status
+    
+    ! valueType determined by alpha/beta
+    integer :: algLocal = CUSPARSE_SPMV_ALG_DEFAULT
+    
+    if (present(alg)) algLocal = alg
+    
+    if (present(buffer)) then
+       status = cusparseSpMV(h, &
+            opA, alpha, A, X, beta, Y, &
+            cudaforGetDataType(alpha), &
+            algLocal, buffer)
+    else
+       block 
+         integer(8) :: bufferSize
+         integer(1), allocatable, device :: buffer_d(:)      
+         
+         status = cusparseSpMV_buffersize(h, &
+              opA, alpha, A, x, beta, y, &
+              cudaforGetDataType(alpha), &
+              algLocal, &
+              buffersize)
+         if (status /= CUSPARSE_STATUS_SUCCESS) return
+         
+         allocate(buffer_d(buffersize))         
+         
+         status = cusparseSpMV(h, &
+              opA, alpha, A, X, beta, Y, &
+              cudaforGetDataType(alpha), &
+              algLocal, &
+              buffer_d)
+         
+         deallocate(buffer_d)
+       end block
+    endif
+  end function cusparseSpMV_abr
+  
+end module cusparseEx

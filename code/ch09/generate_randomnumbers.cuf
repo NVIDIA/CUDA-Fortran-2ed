@@ -1,0 +1,52 @@
+! Generate N random numbers on GPU, copy them back to CPU 
+! and print the first 4
+
+program curand_example
+  use precision_m
+  use curand
+  implicit none
+  real(fp_kind), allocatable:: hostData(:)
+  real(fp_kind), allocatable, device:: deviceData(:)
+  type(curandGenerator) :: gen
+  integer ::  N, istat
+  integer(kind=8) :: seed
+
+  ! Define how many numbers we want to generate
+  N=20
+ 
+  ! Allocate array on CPU
+  allocate(hostData(N))
+
+  ! Allocate array on GPU
+  allocate(deviceData(N))
+
+  if (fp_kind == singlePrecision) then
+     write(*,"('Generating random numbers in single precision')")
+  else
+     write(*,"('Generating random numbers in double precision')")
+  end if
+
+  ! Create pseudonumber generator
+  istat = curandCreateGenerator(gen, CURAND_RNG_PSEUDO_DEFAULT)
+
+  ! Set seed
+  seed=1234
+  istat= curandSetPseudoRandomGeneratorSeed( gen, seed)
+
+  ! Generate N floats or double on device
+  istat= curandGenerate(gen, deviceData, N)
+
+  ! Copy the data back to CPU
+  hostData=deviceData
+
+  ! print the first 4 of the sequence
+  write(*,*) hostData(1:4)
+
+  ! Deallocate data on CPU and GPU
+  deallocate(hostData)
+  deallocate(deviceData)
+  
+  ! Destroy the generator
+  istat = curandDestroyGenerator(gen)
+
+end program curand_example

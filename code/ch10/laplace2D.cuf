@@ -1,0 +1,217 @@
+module laplaceRoutines
+
+  use, intrinsic :: iso_fortran_env
+  integer, parameter :: nx = 8*1024, ny = 8*1024
+  integer, parameter :: fp_kind = real32
+  integer, parameter :: BLOCK_X = 32, BLOCK_Y = 16
+
+contains
+
+  subroutine initialize(a, aNew)
+    implicit none
+    real(fp_kind), parameter :: &
+         pi = 2.0_fp_kind*asin(1.0_fp_kind)
+    real(fp_kind) :: a(nx,ny), aNew(nx,ny)
+    real(fp_kind) :: y0(nx)
+    integer :: i 
+    
+    do i = 1, nx
+       y0(i) = sin(pi*(i-1)/(nx-1))
+    enddo
+    a = 0.0_fp_kind
+    a(:,1) = y0
+    a(:,ny) = y0*exp(-pi)   
+    aNew = a
+  end subroutine initialize
+
+  ! Global memory version
+
+  attributes(global) subroutine jacobiGlobal(a, aNew)
+    real(fp_kind), intent(in) :: a(nx,ny)
+    real(fp_kind) :: aNew(nx,ny)    
+    integer :: i, j
+    
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    j = (blockIdx%y-1)*blockDim%y + threadIdx%y
+
+    if (i>1 .and. i<nx .and. j>1 .and. j<ny) then
+       aNew(i,j) = &
+            0.2_fp_kind * ( & 
+            a(i-1,j) + a(i+1,j) + &
+            a(i,j-1) + a(i,j+1)) + &
+            0.05_fp_kind * (&
+            a(i-1,j-1) + a(i+1,j-1) + &
+            a(i-1,j+1) + a(i+1,j+1))
+    endif
+  end subroutine jacobiGlobal
+
+  ! Shared memory version
+
+  attributes(global) subroutine jacobiShared(a, aNew)
+    real(fp_kind), intent(in) :: a(nx,ny)
+    real(fp_kind) :: aNew(nx,ny)    
+    real(fp_kind), shared :: t(0:BLOCK_X+1, 0:BLOCK_Y+1)
+    integer :: i, j, is, js
+    
+    i = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    j = (blockIdx%y-1)*blockDim%y + threadIdx%y
+    is = threadIdx%x
+    js = threadIdx%y
+
+    if (i > 1 .and. j > 1) &
+         t(is-1, js-1) = a(i-1, j-1)
+    if (i > 1 .and. j < ny .and. js >= BLOCK_Y-2) &
+         t(is-1, js+1) = a(i-1, j+1)
+    if (i < nx .and. j > 1 .and. is >= BLOCK_X-2) &
+         t(is+1,js-1) = a(i+1,j-1)
+    if (i < nx .and. j < ny .and. &
+         is >= BLOCK_X-2 .and. js >= BLOCK_Y-2) &
+         t(is+1,js+1) = a(i+1,j+1)
+    
+    call syncthreads()
+    
+    if (i > 1 .and. i < nx .and. j > 1 .and. j < ny) then
+       aNew(i,j) = 0.2_fp_kind * ( &
+            t(is,js-1) + t(is-1,js) + &
+            t(is+1,js) + t(is,js+1)) &
+            + 0.05_fp_kind * ( &
+            t(is-1,js-1) + t(is+1,js-1) + &
+            t(is-1,js+1) + t(is+1,js+1))
+    endif
+
+  end subroutine jacobiShared
+
+end module laplaceRoutines
+
+
+program laplace
+  use cudafor
+  use laplaceRoutines
+  implicit none
+  integer, parameter :: iterMax = 100
+  integer, parameter :: reportInterval = 10
+  real(fp_kind), parameter :: tol = 1.0e-5_fp_kind 
+
+  real(fp_kind) :: a(nx,ny), aNew(nx,ny)
+  real(fp_kind), device, target :: a_d(nx,ny)
+  real(fp_kind), device :: aNew_d(nx,ny)
+
+  real(fp_kind) :: maxResidual = 2*tol
+  real :: start_time, stop_time
+  integer :: i, j, iter
+
+  type(dim3) :: grid, tBlock
+
+  print '(/,a,i0,a,i0,a)', &
+       'Relaxation calculation on ', nx, ' x ', ny, ' mesh'
+ 
+  ! CPU version
+
+  print "(/,a,/)", 'CPU results'
+  print *, 'Iteration   Max Residual'  
+
+  call initialize(a, aNew)
+
+  iter=0
+  do while ( maxResidual > tol .and. iter <= iterMax )
+     maxResidual = 0.0_fp_kind
+
+     do j=2,ny-1
+        do i=2,nx-1
+           aNew(i,j) = 0.2_fp_kind * & 
+                (a(i,j-1)+a(i-1,j)+a(i+1,j)+a(i,j+1)) + &
+                0.05_fp_kind * &
+                (a(i-1,j-1)+a(i+1,j-1)+a(i-1,j+1)+a(i+1,j+1))
+
+           maxResidual = &
+                max(maxResidual, abs(aNew(i,j)-a(i,j)))
+        end do
+     end do
+     
+     iter = iter + 1
+     if(mod(iter,reportInterval) == 0) &
+          print '(i8,3x,f10.6)', iter, maxResidual
+     a = aNew
+  end do
+
+  ! GPU global version
+
+  print "(/,a,/)", 'GPU global results'
+  print *, 'Iteration   Max Residual'  
+
+  tBlock = dim3(BLOCK_X,BLOCK_Y,1)
+  grid = dim3(ceiling(real(nx)/tBlock%x), &
+       ceiling(real(ny)/tBlock%y), 1)
+
+  call initialize(a, aNew)
+
+  call cpu_time(start_time) 
+
+  a_d = a
+  aNew_d = aNew
+
+  iter=0
+  do while ( maxResidual > tol .and. iter <= iterMax )
+     maxResidual = 0.0_fp_kind
+
+     call jacobiGlobal<<<grid, tBlock>>>(a_d, aNew_d)
+
+     !$cuf kernel do <<<*,*>>>
+     do j = 1, ny
+        do i = 1, nx
+           maxResidual = &
+                max(maxResidual, abs(a_d(i,j)-aNew_d(i,j)))
+        enddo
+     enddo
+     
+     iter = iter + 1
+     if(mod(iter,reportInterval) == 0) &
+          print '(i8,3x,f10.6)', iter, maxResidual
+     a_d = aNew_d
+  end do
+
+  a = aNew_d
+  call cpu_time(stop_time) 
+  print '(a,f10.3,a)',  '  Completed in ', &
+       stop_time-start_time, ' seconds'
+
+  !
+  ! GPU shared memory version
+  !
+
+  print "(/,a,/)", 'GPU shared results'
+  print *, 'Iteration   Max Residual'  
+
+  call initialize(a, aNew)
+
+  call cpu_time(start_time) 
+
+  a_d = a
+  aNew_d = aNew
+
+  iter=0
+  do while ( maxResidual > tol .and. iter <= iterMax )
+     maxResidual = 0.0_fp_kind
+
+     call jacobiShared<<<grid, tBlock>>>(a_d, aNew_d)
+
+     !$CUF kernel do <<<*,*>>>
+     do j = 1, ny
+        do i = 1, nx
+           maxResidual = &
+                max(maxResidual, abs(a_d(i,j)-aNew_d(i,j)))
+        enddo
+     enddo
+     
+     iter = iter + 1
+     if(mod(iter,reportInterval) == 0) &
+          print '(i8,3x,f10.6)', iter, maxResidual
+     a_d = aNew_d
+  end do
+
+  a = aNew_d
+  call cpu_time(stop_time) 
+  print '(a,f10.3,a)',  '  Completed in ', &
+       stop_time-start_time, ' seconds'
+
+end program laplace

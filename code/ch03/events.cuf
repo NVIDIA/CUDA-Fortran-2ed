@@ -1,0 +1,51 @@
+module m
+contains
+  attributes(global) subroutine increment(a, b)
+    implicit none
+    integer, intent(inout) :: a(*)
+    integer, value :: b
+    integer :: i
+
+    i = threadIdx%x
+    a(i) = a(i)+b
+
+  end subroutine increment
+end module m
+
+
+program events  
+  use cudafor
+  use m
+  implicit none
+  integer, parameter :: n = 256
+  integer :: a(n), b
+  integer, device :: a_d(n)
+  type(cudaEvent) :: startEvent, stopEvent
+  real :: time
+  integer :: istat
+
+  a = 1
+  b = 3
+  a_d = a
+
+  istat = cudaEventCreate(startEvent)
+  istat = cudaEventCreate(stopEvent)
+
+  istat = cudaEventRecord(startEvent, 0)
+  call increment<<<1,n>>>(a_d, b)
+  istat = cudaEventRecord(stopEvent, 0)
+  istat = cudaEventSynchronize(stopEvent)
+  istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+
+  a = a_d
+
+  if (any(a /= 4)) then
+     print *, '**** Program Failed ****'
+  else
+     print *, '  Time for kernel execution (ms): ', time
+  endif
+
+  istat = cudaEventDestroy(startEvent)
+  istat = cudaEventDestroy(stopEvent)
+
+end program events

@@ -1,0 +1,299 @@
+! multi-GPU transpose using CUDA's peer-to-peer capability
+!
+! This code requires all visible devices have direct access 
+! with each other.  Use CUDA_VISIBLE_DEVICES to enumerate a 
+! list of devices that are P2P accessible with each other.  
+! Run the p2pAccess to see which devices have direct access 
+! with each other.
+
+module transpose_m
+  integer, parameter :: blockRows = 32, blockCols = 8
+  integer, parameter :: nTile = blockRows
+contains
+
+  attributes(global) subroutine cudaTranspose( &
+       matOut, ldOut, matIn, ldIn)
+    implicit none
+    real, intent(out) :: matOut(ldOut, *)
+    real, intent(in) :: matIn(ldIn, *)
+    integer, value, intent(in) :: ldOut, ldIn
+    real, shared :: tile(nTile+1, nTile)
+    integer :: row, col, j
+
+    row = (blockIdx%x-1)*nTile + threadIdx%x
+    col = (blockIdx%y-1)*nTile + threadIdx%y
+    
+    do j = 0, nTile-1, blockCols
+       tile(threadIdx%x, threadIdx%y+j) = matIn(row, col+j)
+    end do
+    
+    call syncthreads()
+    
+    row = (blockIdx%y-1)*nTile + threadIdx%x
+    col = (blockIdx%x-1)*nTile + threadIdx%y
+    
+    do j = 0, nTile-1, blockCols
+       matOut(row,col+j) = tile(threadIdx%y+j, threadIdx%x)          
+    end do
+  end subroutine cudaTranspose
+
+end module transpose_m
+
+!
+! Main code
+!
+
+program transposeP2P
+  use cudafor
+  use transpose_m 
+  use timing
+
+  implicit none
+
+  ! global array size
+  integer, parameter :: nRows = 1024, nCols = 768
+
+  ! toggle async 
+  logical, parameter :: asyncVersion = .true.
+  
+  ! host arrays (global)
+  real :: matIn(nRows, nCols), matOut(nCols, nRows), gold(nCols, nRows)
+  real (kind=8) :: timeStart, timeStop
+
+  ! CUDA vars and device arrays
+  type (dim3) :: dimGrid, dimBlock
+  integer(kind=cuda_stream_kind), allocatable :: &
+       streamID(:,:)  ! (device, stage)
+
+  ! distributed arrays
+  type deviceArray
+     real, device, allocatable :: v(:,:)
+  end type deviceArray
+
+  type (deviceArray), allocatable :: &
+       matIn_da(:), matOut_da(:), matRec_da(:)  ! (0:nDevices-1)
+
+  integer :: nDevices
+  type (cudaDeviceProp) :: prop
+  integer, allocatable :: devices(:)
+
+  integer :: p2pTileRows, p2pTileCols
+  integer :: i, j, p, access, istat
+  integer :: rowOffset, colOffset
+  integer :: rDev, sDev, stage
+
+  ! determine number of devices
+
+  istat = cudaGetDeviceCount(nDevices)
+  print "('Number of CUDA-capable devices: ', i0,/)", nDevices
+
+  do i = 0, nDevices-1
+     istat = cudaGetDeviceProperties(prop, i)
+     print "('  Device ', i0, ': ', a)", i, trim(prop%name)
+  end do
+
+  ! check to make sure all devices are P2P accessible with 
+  ! each other and enable peer access, if not exit
+  
+  do j = 0, nDevices-1
+     do i = j+1, nDevices-1
+        istat = cudaDeviceCanAccessPeer(access, j, i)
+        if (access /= 1) then 
+           print *, &
+                'Not all devices are P2P accessible ', & 
+                'with each other.'
+           print *, &
+                'Use the p2pAccess code to determine ', &
+                'a subset that can do P2P and set'
+           print *, &
+                'the environment variable ', &
+                'CUDA_VISIBLE_DEVICES accordingly'
+           stop
+        end if
+        istat = cudaSetDevice(j)
+        istat = cudaDeviceEnablePeerAccess(i, 0)
+        istat = cudaSetDevice(i)
+        istat = cudaDeviceEnablePeerAccess(j, 0)
+     end do
+  end do
+
+  ! determine partition sizes and check tile sizes
+
+  if (mod(nRows,nDevices) == 0 .and. mod(nCols,nDevices) == 0) then
+     p2pTileRows = nRows/nDevices
+     p2pTileCols = nCols/nDevices
+  else
+     print *, 'nRows, nCols must be multiples of nDevices'
+     stop
+  endif
+
+  if (mod(p2pTileRows, nTile) /= 0 .or. &
+      mod(p2pTileCols, nTile) /= 0) then
+     print *, 'p2pTile[Rows|Cols] must be integral multiples of nTile'
+     stop
+  end if
+  
+  if (mod(nTile, blockCols) /= 0) then
+     print *, 'nTile must be an integral multiple of blockCols'
+     stop
+  end if
+
+  dimGrid = dim3(p2pTileRows/nTile, p2pTileCols/nTile, 1)
+  dimBlock = dim3(nTile, blockCols, 1)
+
+  ! write parameters
+
+  print "(/,'Array size: ', i0,'x',i0,/)", nRows, nCols
+
+  print "('CUDA block size: ', i0,'x',i0, &
+       ',  CUDA tile size: ', i0,'x',i0)", &
+       nTile, blockCols, nTile, nTile
+     
+  print "('dimGrid: ', i0,'x',i0,'x',i0, &
+       ',   dimBlock: ', i0,'x',i0,'x',i0,/)", &
+       dimGrid%x, dimGrid%y, dimGrid%z, &
+       dimBlock%x, dimBlock%y, dimBlock%z
+  
+  print "('nDevices: ', i0, ', Local input array size: ', i0,'x',i0)", &
+       nDevices, nRows, p2pTileCols
+  print "('p2pTile: ', i0,'x',i0,/)", p2pTileRows, p2pTileCols
+
+  print "('async mode: ', l,//)", asyncVersion
+
+  ! allocate and initialize arrays
+
+  call random_number(matIn)
+  gold = transpose(matIn)
+
+  ! A stream is associated with a device, 
+  ! so first index of streamID is the device (0:nDevices-1) 
+  ! and second is the stage, which also spans (0:nDevices-1)
+  !
+  ! The 0th stage corresponds to the local transpose (on 
+  ! diagonal tiles), and 1:nDevices-1 are the stages with
+  ! P2P communication 
+
+  allocate(streamID(0:nDevices-1,0:nDevices-1))
+  do p = 0, nDevices-1
+     istat = cudaSetDevice(p)
+     do stage = 0, nDevices-1
+        istat = cudaStreamCreate(streamID(p,stage))
+     enddo
+  enddo
+
+  ! device data allocation and initialization
+
+  allocate(matIn_da(0:nDevices-1),&
+       matOut_da(0:nDevices-1), matRec_da(0:nDevices-1))
+  
+  do p = 0, nDevices-1
+     istat = cudaSetDevice(p)
+     allocate(matIn_da(p)%v(nRows,p2pTileCols), &
+          matRec_da(p)%v(nRows,p2pTileCols), &
+          matOut_da(p)%v(nCols,p2pTileRows))
+
+     colOffset = p*p2pTileCols
+     matIn_da(p)%v(:,:) = &
+          matIn(:,colOffset+1:colOffset+p2pTileCols)
+     matRec_da(p)%v(:,:) = -1.0
+     matOut_da(p)%v(:,:) = -1.0
+  enddo
+
+  ! ---------
+  ! transpose
+  ! ---------
+
+  do p = 0, nDevices-1
+     istat = cudaSetDevice(p)
+     istat = cudaDeviceSynchronize()
+  enddo
+  timeStart = wallclock()
+
+  ! Stage 0:
+  ! transpose diagonal blocks (local data) before kicking off 
+  ! transfers and transposes of other blocks
+
+  do p = 0, nDevices-1
+     istat = cudaSetDevice(p)
+     if (asyncVersion) then
+        call cudaTranspose &
+             <<<dimGrid, dimBlock, 0, streamID(p,0)>>> &
+             (matOut_da(p)%v(p*p2pTileCols+1,1), nCols, &
+             matIn_da(p)%v(p*p2pTileRows+1,1), nRows)
+     else
+        call cudaTranspose<<<dimGrid, dimBlock>>> &
+             (matOut_da(p)%v(p*p2pTileCols+1,1), nCols, &
+             matIn_da(p)%v(p*p2pTileRows+1,1), nRows)
+     endif
+  enddo
+  
+  ! now send data to blocks to the left of diagonal 
+  ! (using mod for wrapping) and transpose
+
+  do stage = 1, nDevices-1    ! stages = offset diagonals
+     do rDev = 0, nDevices-1  ! device that receives
+        sDev = mod(stage+rDev, nDevices)  ! dev that sends
+
+        if (asyncVersion) then
+           istat = cudaSetDevice(rDev)
+           istat = cudaMemcpy2DAsync( &
+                matRec_da(rDev)%v(sDev*p2pTileRows+1,1), nRows, &
+                matIn_da(sDev)%v(rDev*p2pTileRows+1,1), nRows, &
+                p2pTileRows, p2pTileCols, &
+                stream=streamID(rDev,stage))
+        else
+           istat = cudaMemcpy2D( &
+                matRec_da(rDev)%v(sDev*p2pTileRows+1,1), nRows, &
+                matIn_da(sDev)%v(rDev*p2pTileRows+1,1), nRows, &
+                p2pTileRows, p2pTileCols)
+        end if
+
+        istat = cudaSetDevice(rDev)
+        if (asyncVersion) then
+           call cudaTranspose &
+                <<<dimGrid, dimBlock, 0, streamID(rDev,stage)>>>  &
+                (matOut_da(rDev)%v(sDev*p2pTileCols+1,1), nCols, &
+                matRec_da(rDev)%v(sDev*p2pTileRows+1,1), nRows)
+        else
+           call cudaTranspose<<<dimGrid, dimBlock>>> &
+                (matOut_da(rDev)%v(sDev*p2pTileCols+1,1), nCols, &
+                matRec_da(rDev)%v(sDev*p2pTileRows+1,1), nRows)
+        endif
+     enddo
+  enddo
+
+  ! wait for execution to complete and get wallclock
+  do p = 0, nDevices-1
+     istat = cudaSetDevice(p)
+     istat = cudaDeviceSynchronize()
+  enddo
+  timeStop = wallclock()
+
+  ! transfer results to host and check for errors
+
+  do p = 0, nDevices-1
+     rowOffset = p*p2pTileRows
+     istat = cudaSetDevice(p)
+     matOut(:,rowOffset+1:rowOffset+p2pTileRows) = &
+          matOut_da(p)%v(:,:)
+  end do
+
+  if (all(matOut == gold)) then 
+     print "('Bandwidth (GB/s): ', f7.2,/)", &
+          2.*(nRows*nCols*4)/(1.0e+9*(timeStop-timeStart)) 
+  else
+     print "(' *** Failed ***',/)"
+  endif
+
+  ! cleanup
+
+  do p = 0, nDevices-1
+     istat = cudaSetDevice(p)
+     deallocate(matIn_da(p)%v, matOut_da(p)%v, matRec_da(p)%v)
+     do stage = 0, nDevices-1
+        istat = cudaStreamDestroy(streamID(p,stage))
+     enddo
+  end do
+  deallocate(matIn_da, matout_da, matRec_da)
+
+end program transposeP2P

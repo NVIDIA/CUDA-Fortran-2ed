@@ -1,0 +1,67 @@
+program main
+  use cudafor
+  use cutensorEx
+  implicit none
+  integer, parameter :: m=3200, n=3200, k=3200
+  real(8) :: a(m,k), b(k,n)
+  real(8) :: c(m,n), cref(m,n)
+  real(8), device :: a_d(m,k), b_d(k,n)
+  real(8), device :: c_d(m,n)
+  integer :: istat
+  
+  type(cudaDeviceProp) :: prop
+  type(cudaEvent) :: startEvent, stopEvent
+  real :: err, time
+
+  istat = cudaGetDeviceProperties(prop, 0)
+  print "(' Device: ', a)", trim(prop%name)
+  print "(' m = ', i0, ', n = ', i0, ', k = ', i0)", m, n, k
+  
+  istat = cudaEventCreate(startEvent)
+  istat = cudaEventCreate(stopEvent)
+  
+  call random_number(a)
+  call random_number(b)
+
+  ! on host
+  cref = matmul(a,b)
+  
+  a_d = a; b_d = b
+  ! for overhead
+  c_d = matmul(a_d, b_d)
+
+  c_d = 0.0
+  istat = cudaDeviceSynchronize()
+  istat = cudaEventRecord(startEvent, 0)
+  c_d = matmul(a_d, b_d)
+  istat = cudaEventRecord(stopEvent, 0)
+  istat = cudaEventSynchronize(stopEvent)
+  c = c_d
+  istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+   
+  print *, 'cuTensor matmul maxval(abs(cref-c)): ', maxval(abs(cref-c))
+  print *, 'cuTensor matmul TFLOPS: ',  2.*k*m*n/(time/1000.)/1.0E+12
+
+  block
+    use cublas_v2
+    type(cublasHandle) :: handle    
+
+    istat = cublasCreate(handle)
+    c_d = 0.0
+    istat = cudaDeviceSynchronize()
+    istat = cudaEventRecord(startEvent, 0)
+    istat = cublasDGemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, &
+         m, n, k, 1.0_8, a_d, m, b_d, k, 0.0_8, c_d, n)
+    istat = cudaEventRecord(stopEvent, 0)
+    istat = cudaEventSynchronize(stopEvent)
+    c = c_d
+    istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+    
+    print *, 'cublasDGemm maxval(abs(cref-c)): ', maxval(abs(cref-c))
+    print *, 'cublasDGemm TFLOPS: ',  2.*k*m*n/(time/1000.)/1.0E+12
+
+    istat = cublasDestroy(handle)
+  end block
+
+end program main
+  

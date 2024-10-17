@@ -1,0 +1,62 @@
+module pi_shared_m
+contains
+  attributes(global) subroutine final_pi_shared(partial)
+    implicit none
+    integer :: partial(*)
+
+    integer, shared :: p_s(*)
+    integer :: index, inext
+    
+    index=threadIdx%x
+    
+    p_s(index)=partial(index)
+    call syncthreads()
+    
+    inext=blockDim%x/2
+    do while ( inext >=1 )
+       if (index <=inext) &
+            p_s(index)=p_s(index)+p_s(index+inext)
+       inext = inext/2
+       call syncthreads()
+    end do
+    if (index == 1) partial(1)=p_s(1)
+  end subroutine final_pi_shared
+  
+  attributes(global) &
+       subroutine partial_pi_shared(input, partial, twoN)
+    use precision_m
+    implicit none    
+    real(fp_kind) :: input(twoN)
+    integer :: partial(*)
+    integer, value :: twoN
+
+    integer, shared :: p_s(*)
+    integer :: N
+    integer :: i, index, inext,interior
+
+    N = twoN/2 ! x=input(1:N), y=input(N+1:twoN)
+
+    ! grid-stride loop over data
+    index=threadIdx%x+(blockIdx%x-1)*blockDim%x
+    interior=0
+    do i=index, N, BlockDim%x*GridDim%x
+       if( (input(i)**2 + input(i+N)**2) <= 1._fp_kind ) &
+            interior=interior+1
+    end do
+
+    ! Local reduction within block
+    index=threadIdx%x
+    p_s(index)=interior
+    call syncthreads()
+
+    inext=blockDim%x/2
+    do while ( inext >=1 )
+       if (index <=inext) &
+            p_s(index)=p_s(index)+p_s(index+inext)
+       inext = inext/2
+       call syncthreads()
+    end do
+    if (index == 1) partial(blockIdx%x)=p_s(1)
+  end subroutine partial_pi_shared
+end module pi_shared_m
+

@@ -1,0 +1,208 @@
+module poisson_m
+  use precision_m
+
+  complex(fp_kind), device :: ref_sol
+
+contains
+
+  attributes(global) subroutine real2complex(a, b, N, M)
+    implicit none
+    real(fp_kind) :: a(N,M)
+    complex(fp_kind) :: b(N,M)
+    integer, value :: N,M
+    integer :: i,j
+
+    i=threadIdx%x+(blockIdx%x-1)*blockDim%x
+    j=threadIdx%y+(blockIdx%y-1)*blockDim%y
+    
+    if ( i .le. N .and. j .le. M) then
+       b(i,j) = cmplx( a(i,j), 0._fp_kind,fp_kind )
+    end if
+  end subroutine real2complex
+  
+  attributes(global) subroutine real2complex1D(a, b, N, M)
+    implicit none
+    real(fp_kind) :: a(N*M)
+    complex(fp_kind) :: b(N*M)
+    integer, value :: N, M
+    integer :: i, index
+    
+    index=threadIdx%x+(blockIdx%x-1)*blockDim%x
+    
+    do i=index,N*M,blockDim%x*GridDim%x 
+       b(i) = cmplx( a(i), 0._fp_kind,fp_kind )
+    end do
+  end subroutine real2complex1D
+
+  attributes(global) subroutine &
+       complex2real(input, output, ref_sol, N, M)
+    implicit none
+    complex(fp_kind) :: input(N,M),ref_sol
+    real(fp_kind) :: output(N,M)
+    integer, value :: N, M
+    integer :: i, j
+    real(fp_kind) :: scale
+    
+    i=threadIdx%x+(blockIdx%x-1)*blockDim%x
+    j=threadIdx%y+(blockIdx%y-1)*blockDim%y
+    
+    scale = 1._fp_kind/real(N*M,fp_kind)
+    if ( i .le. N .and. j .le. M) then
+       output(i,j) = (real(input(i,j),fp_kind) -real(ref_sol,fp_kind))*scale
+    end if
+  end subroutine complex2real
+  
+  attributes(global) subroutine &
+       solve_poisson( phi, kx,ky, N, M)
+    implicit none
+    complex(fp_kind) :: phi(N,M)
+    real(fp_kind) :: kx(N),ky(M)
+    integer, value :: N,M
+    integer :: i,j
+    real(fp_kind) :: scale
+    
+    i=threadIdx%x+(blockIdx%x-1)*blockDim%x
+    j=threadIdx%y+(blockIdx%y-1)*blockDim%y
+    
+    if ( i .le. N .and. j .le. M) then
+       scale =  (kx(i)*kx(i)+ky(j)*ky(j))
+       if ( i .eq. 1 .and. j .eq. 1) scale = 1._fp_kind
+       phi(i,j) = -phi(i,j)/scale
+    end if
+  end subroutine solve_poisson
+  
+end module poisson_m
+
+program poisson
+  use iso_c_binding
+  use precision_m
+  use cufft
+  use poisson_m
+  use cudafor
+  implicit none
+  
+  real(fp_kind), allocatable :: kx(:), ky(:), x(:), y(:)
+  real(fp_kind), allocatable, device :: &
+       kx_d(:), ky_d(:), x_d(:), y_d(:)
+  
+  real(fp_kind), allocatable, pinned :: &
+       rinput(:,:), routput(:,:)
+  real(fp_kind), allocatable, device :: rinput_d(:,:)
+  complex(fp_kind), allocatable, device :: cinput_d(:,:)
+  
+  real(fp_kind) :: ref
+  integer :: i, j, n, m, istat, plan
+  real(fp_kind) :: twopi=8._fp_kind*atan(1._fp_kind)
+  real(fp_kind) :: hx, hy, alpha, L, r, norm_inf,norm_l2,err
+  type(dim3) :: grid, tBlock
+  
+  type(cudaEvent) :: startEvent, stopEvent
+  real :: time
+  character(len=12) :: arg
+
+  interface cufftExec
+    module procedure cufftExecC2C, cufftExecZ2Z
+  end interface 
+  
+  istat=cudaEventCreate(startEvent)
+  istat=cudaEventCreate(stopEvent)
+  
+  
+  
+  n=1024; m= 1024; L=1._fp_kind
+  alpha=(0.1_fp_kind)**2
+  
+  print *,"Poisson equation on a mesh :",n,m
+  
+  ! Allocate arrays on the host
+  allocate(rinput(n,m),routput(n,m),kx(n),ky(m),x(n),y(m))
+  
+  ! Allocate arrays on the device
+  allocate(rinput_d(n,m),cinput_d(n,m),kx_d(n),ky_d(m))
+  
+  ! Initialize arrays on the host
+  kx = twopi/L* [ (i-1, i=1,n/2),(-n+i-1, i=n/2+1,n) ]
+  ky = twopi/L* [ (j-1, j=1,m/2),(-m+j-1, j=m/2+1,m) ]
+  
+  hx = L/real(n,fp_kind)
+  hy = L/real(m,fp_kind)
+  
+  x = -L/2+hx*[(i-1, i=1,n)]
+  y = -L/2+hy*[(j-1, j=1,m)]
+  
+  do j=1,m
+     do i=1,n
+        r =  x(i)**2 +  y(j)**2 
+        rinput(i,j) = exp(-r/(2*alpha)) &
+             * (r-2*alpha)/(alpha*alpha)
+     end do
+  end do
+  
+  istat=cudaEventRecord(startEvent,0) !start timing
+  
+  ! Copy arrays to device
+  rinput_d=rinput
+  kx_d = kx
+  ky_d = ky
+  
+  ! Initialize the plan for complex to complex transforms
+  ! Transpose dimensions to accomodate row-majoring order in CUFFT 
+  if ( fp_kind == real32) &
+       istat=cufftPlan2D(plan,m,n,CUFFT_C2C)
+  if ( fp_kind == real64) &
+       istat=cufftPlan2D(plan,m,n,CUFFT_Z2Z)
+  
+  ! Set up execution configuration
+  tBlock = dim3(16,16,1)
+  grid = dim3(ceiling(real(n)/tBlock%x), &
+       ceiling(real(m)/tBlock%y), 1 )
+    
+  ! Transform real array to complex
+  !call real2complex<<<grid,tBlock>>>(rinput_d,cinput_d,N,M)
+  call real2complex1D<<<grid,tBlock>>>(rinput_d,cinput_d,N,M)
+  
+  ! Execute forward transform in place
+  istat=cufftExec(plan,cinput_d,cinput_d,CUFFT_FORWARD)
+  
+  !Call kernel to solve the Poisson equation in Fourier space
+  call solve_poisson<<<grid,tBlock>>>(cinput_d,kx_d,ky_d,N,M)
+  
+  !Execute backward transform in place
+  istat=cufftExec(plan,cinput_d,cinput_d,CUFFT_INVERSE)
+  
+  ! Transform complex array to real and scale
+  istat =  cudaMemcpy(ref_sol,cinput_d(1,1),1)
+  call complex2real<<<grid,tBlock>>>(cinput_d,rinput_d, &
+       ref_sol,N,M)
+  
+  ! Copy result back to host
+  routput=rinput_d
+  
+  istat=cudaEventRecord(stopEvent,0)
+  istat=cudaEventSynchronize(stopEvent)
+  istat=cudaEventElapsedTime(time,startEvent,stopEvent)
+  
+  print *,"Elapsed time (ms) :",time
+  
+  ! Compute L1 and L_infinity norms of the error on CPU
+  norm_inf = 0._fp_kind
+  norm_L2  = 0._fp_kind
+  do j=1,m
+     do i=1,n
+        r =  x(i)**2 +  y(j)**2 
+        rinput(i,j) = exp(-r/(2*alpha))
+        err = routput(i,j)-rinput(i,j)
+        norm_inf = max(abs(err),norm_inf) 
+        norm_L2  = norm_L2+err*err
+     end do
+  end do
+  norm_L2=sqrt(norm_L2)/real(n*m,fp_kind)
+  
+  print *,"L infinity norm:",norm_inf
+  print *,"L2 norm        :",norm_L2
+  
+  deallocate(rinput,routput,kx,ky,x,y)
+  deallocate(rinput_d,cinput_d,kx_d,ky_d)
+  
+  istat=cufftDestroy(plan)
+end program poisson

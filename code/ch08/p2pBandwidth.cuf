@@ -1,0 +1,96 @@
+program p2pBandwidth
+  use cudafor
+  implicit none
+  integer, parameter :: N = 4*1024*1024
+  type distributedArray
+     real, device, allocatable :: a_d(:)
+  end type distributedArray
+  type (distributedArray), allocatable :: distArray(:) 
+
+  real, allocatable :: bandwidth(:,:)
+  real :: array(N), time
+  integer :: nDevices, access, i, j, istat
+  type (cudaDeviceProp) :: prop
+  type (cudaEvent) :: startEvent, stopEvent
+
+  istat = cudaGetDeviceCount(nDevices)
+  print "('Number of CUDA-capable devices: ', i0,/)", &
+       nDevices
+  
+  do i = 0, nDevices-1
+     istat = cudaGetDeviceProperties(prop, i)
+     print "('Device ', i0, ': ', a)", i, trim(prop%name)
+  enddo
+  print *
+
+  allocate(distArray(0:nDevices-1))
+
+  do j = 0, nDevices-1
+     istat = cudaSetDevice(j)
+     allocate(distArray(j)%a_d(N))     
+     distArray(j)%a_d = j
+     do i = j+1, nDevices-1
+        istat = cudaDeviceCanAccessPeer(access, j, i)
+        if (access == 1) then 
+           istat = cudaSetDevice(j)
+           istat = cudaDeviceEnablePeerAccess(i, 0)
+           istat = cudaSetDevice(i)
+           istat = cudaDeviceEnablePeerAccess(j, 0)
+        endif
+     enddo
+  end do
+
+  allocate(bandwidth(0:nDevices-1, 0:nDevices-1))
+  bandwidth = 0.0
+
+  do j = 0, nDevices-1
+     istat = cudaSetDevice(j)
+     istat = cudaEventCreate(startEvent)
+     istat = cudaEventCreate(stopEvent)
+     do i = 0, nDevices-1
+        if (i == j) cycle
+        istat = cudaMemcpyPeer(distArray(j)%a_d, j, &
+             distArray(i)%a_d, i, N) 
+        istat = cudaEventRecord(startEvent,0)
+        istat = cudaMemcpyPeer(distArray(j)%a_d, j, &
+             distArray(i)%a_d, i, N) 
+        istat = cudaEventRecord(stopEvent,0)
+        istat = cudaEventSynchronize(stopEvent)
+        istat = cudaEventElapsedTime(time, &
+             startEvent, stopEvent)
+
+        array = distArray(j)%a_d
+        if (all(array == i)) bandwidth(j,i) = N*4/time/1.0E+6
+     end do
+     distArray(j)%a_d = j
+     istat = cudaEventDestroy(startEvent)
+     istat = cudaEventDestroy(stopEvent)
+  enddo
+
+  print "('Bandwidth (GB/s) for transfer size (MB): ', &
+       f9.3,/)", N*4.0/1024**2
+  write (*,"(' S\\R   0')", advance='no') 
+  do i = 1, nDevices-1
+     write(*,"(5x,i3)", advance='no') i
+  enddo
+  print *
+
+  do j = 0, nDevices-1
+     write(*,"(i3)", advance='no') j
+     do i = 0, nDevices-1
+        if (i == j) then
+           write(*,"(4x,'-',3x)", advance='no')
+        else
+           write(*,"(f8.2)",advance='no') bandwidth(j,i)
+        end if
+     end do
+     write(*,*)
+  end do
+
+  ! cleanup
+  do j = 0, nDevices-1
+     deallocate(distArray(j)%a_d)
+  end do
+  deallocate(distArray,bandwidth)
+
+end program p2pBandwidth

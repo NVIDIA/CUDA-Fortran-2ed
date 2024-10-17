@@ -1,0 +1,389 @@
+module kernels
+  integer, parameter :: nRows=1024, nCols=1024
+  integer, parameter :: blockRows = 32, blockCols = 8
+  integer, parameter :: nTile = blockRows
+contains
+
+  ! copy kernel (reference case)
+
+  attributes(global) subroutine copyMat(matOut, matIn)
+    implicit none
+    real, intent(out) :: matOut(nRows, nCols)
+    real, intent(in) :: matIn(nRows, nCols)
+
+    integer :: row, col, j
+
+    row = (blockIdx%x-1)*nTile + threadIdx%x
+    col = (blockIdx%y-1)*nTile + threadIdx%y
+
+    do j = 0, nTile-1, blockCols
+       matOut(row, col+j) = matIn(row, col+j)
+    enddo
+  end subroutine copyMat
+
+  ! copy kernel using shared memory (reference case)
+
+  attributes(global) subroutine copySharedMem(matOut, matIn)
+    implicit none
+    real, intent(out) :: matOut(nRows, nCols)
+    real, intent(in) :: matIn(nRows, nCols)
+
+    real, shared :: tile(nTile, nTile)
+    integer :: row, col, j
+    
+    row = (blockIdx%x-1)*nTile + threadIdx%x
+    col = (blockIdx%y-1)*nTile + threadIdx%y
+
+    do j = 0, nTile-1, blockCols
+       tile(threadIdx%x, threadIdx%y+j) = matIn(row,col+j)
+    end do
+
+    call syncthreads()
+
+    do j = 0, nTile-1, blockCols
+       matOut(row,col+j) = tile(threadIdx%x, threadIdx%y+j)          
+    end do
+  end subroutine copySharedMem
+
+  ! naive transpose
+  !
+  ! simplest transpose - doesn't use shared memory
+  ! reads from global memory are coalesced but not writes
+
+  attributes(global) subroutine transposeNaive(matOut, matIn)
+    implicit none
+    real, intent(out) :: matOut(nCols, nRows)
+    real, intent(in) :: matIn(nRows, nCols)
+    
+    integer :: row, col, j
+
+    row = (blockIdx%x-1)*nTile + threadIdx%x
+    col = (blockIdx%y-1)*nTile + threadIdx%y
+
+    do j = 0, nTile-1, blockCols
+       matOut(col+j,row) = matIn(row,col+j)     
+    end do
+  end subroutine transposeNaive
+
+  ! coalesced transpose
+  !
+  ! uses shared memory to achieve coalesing 
+  ! in both reads and writes
+  !
+  ! tile size causes shared memory bank conflicts
+
+  attributes(global) subroutine transposeCoalesced(matOut, matIn)
+    implicit none
+    real, intent(out) :: matOut(nCols, nRows)
+    real, intent(in) :: matIn(nRows, nCols)
+    
+    real, shared :: tile(nTile, nTile)
+    integer :: row, col, j
+
+    row = (blockIdx%x-1)*nTile + threadIdx%x
+    col = (blockIdx%y-1)*nTile + threadIdx%y
+
+    do j = 0, nTile-1, blockCols
+       tile(threadIdx%x, threadIdx%y+j) = matIn(row,col+j)
+    end do
+
+    call syncthreads()
+
+    row = (blockIdx%y-1)*nTile + threadIdx%x
+    col = (blockIdx%x-1)*nTile + threadIdx%y
+
+    do j = 0, nTile-1, blockCols
+       matOut(row,col+j) = tile(threadIdx%y+j, threadIdx%x)          
+    end do
+  end subroutine transposeCoalesced
+
+  ! no bank-conflict transpose
+  !
+  ! like transposeCoalesced except the first tile dim 
+  ! is padded to avoid shared memory bank conflicts
+
+  attributes(global) subroutine transposeNoBankConflicts(matOut, matIn)
+    implicit none
+    real, intent(out) :: matOut(nCols, nRows)
+    real, intent(in) :: matIn(nRows, nCols)
+    
+    real, shared :: tile(nTile+1, nTile)
+    integer :: row, col, j
+
+    row = (blockIdx%x-1)*nTile + threadIdx%x
+    col = (blockIdx%y-1)*nTile + threadIdx%y
+
+    do j = 0, nTile-1, blockCols
+       tile(threadIdx%x, threadIdx%y+j) = matIn(row,col+j)
+    end do
+
+    call syncthreads()
+
+    row = (blockIdx%y-1)*nTile + threadIdx%x
+    col = (blockIdx%x-1)*nTile + threadIdx%y
+
+    do j = 0, nTile-1, blockCols
+       matOut(row,col+j) = tile(threadIdx%y+j, threadIdx%x)          
+    end do
+  end subroutine transposeNoBankConflicts
+
+  ! diagonal transpose
+  !
+  ! essentially reschedules the order in which thread blocks
+  ! are launched
+  
+  attributes(global) subroutine transposeDiagonal(matOut, matIn)
+    implicit none
+    real, intent(out) :: matOut(nCols, nRows)
+    real, intent(in) :: matIn(nRows, nCols)
+    
+    real, shared :: tile(nTile+1, nTile)
+    integer :: row, col, j
+    integer :: blockIdx_x, blockIdx_y
+    
+    if (nRows == nCols) then
+       blockIdx_y = blockIdx%x
+       blockIdx_x = &
+            mod(blockIdx%x+blockIdx%y-2,gridDim%x)+1
+    else
+       row = blockIdx%x + gridDim%x*(blockIdx%y-1)
+       blockIdx_y = mod(row-1,gridDim%y)+1
+       blockIdx_x = &
+            mod((row-1)/gridDim%y+blockIdx_y-1,gridDim%x)+1
+    endif
+            
+    row = (blockIdx_x-1)*nTile + threadIdx%x
+    col = (blockIdx_y-1)*nTile + threadIdx%y
+
+    do j = 0, nTile-1, blockCols
+       tile(threadIdx%x, threadIdx%y+j) = matIn(row,col+j)
+    end do
+
+    call syncthreads()
+
+    row = (blockIdx_y-1)*nTile + threadIdx%x
+    col = (blockIdx_x-1)*nTile + threadIdx%y
+
+    do j = 0, nTile-1, blockCols
+       matOut(row,col+j) = tile(threadIdx%y+j, threadIdx%x)          
+    end do
+  end subroutine transposeDiagonal
+
+end module kernels
+
+
+
+program transposeTest
+  use cudafor
+  use kernels 
+
+  implicit none
+
+  ! thread block's x member determines shared memory tile size:
+  !   tile(blockDim%x,blockDim%x)
+  type(dim3), parameter :: threadBlock = dim3(blockRows, blockCols, 1)
+  
+  ! number of repitions for timing
+  integer, parameter :: NUM_REPS = 100  
+
+  type(dim3) :: grid
+  type(cudaEvent) :: startEvent, stopEvent
+  type(cudaDeviceProp) :: prop
+  real :: time
+
+  real :: matIn(nRows,nCols), matCpy(nRows,nCols), matTrp(nCols,nRows)
+  real :: gold(nCols,nRows)
+  real, device :: matIn_d(nRows,nCols), &
+       matCpy_d(nRows,nCols), matTrp_d(nCols,nRows)
+  integer :: i, j, istat
+
+  ! check parameters and calculate execution configuration
+
+  if (mod(nRows, nTile) /= 0 &
+       .or. mod(nCols, nTile) /= 0) then
+     print *,  'nRows and nCols must be a multiple of nTile'
+     stop
+  end if
+
+  if (mod(threadBlock%x, threadBlock%y) /= 0) then
+     print *, 'threadBlock%x must be a multiple of threadBlock%y'
+     stop
+  end if
+
+  grid = dim3(nRows/nTile, nCols/nTile, 1)
+
+  ! write parameters
+
+  i = cudaGetDeviceProperties(prop, 0)
+  print "(/,'Device Name: ',a)", trim(prop%name)
+  print "('Compute Capability: ',i0,'.',i0)", &
+       prop%major, prop%minor
+
+
+  print *
+  print "('Matrix size: ', i0, 'x', i0, &
+       ',  Tile size: ', i0, 'x', i0)", &
+       nRows, nCols, nTile, nTile
+
+  print "('Grid: ', i0, 'x', i0, 'x', i0, &
+       ',   Thread block: ', i0, 'x', i0, 'x', i0)", &
+       grid%x, grid%y, grid%z, &
+       threadBlock%x, threadBlock%y, threadBlock%z
+
+  ! initialize data
+
+  ! host
+
+  call random_number(matIn)
+  gold = transpose(matIn)
+
+  ! device
+
+  matIn_d = matIn
+  matTrp_d = -1.0
+  matCpy_d = -1.0
+
+  ! events for timing
+
+  istat = cudaEventCreate(startEvent)
+  istat = cudaEventCreate(stopEvent)
+
+  ! ------------
+  ! time kernels
+  ! ------------
+
+  print '(/,a25,a25)', 'Routine', 'Bandwidth (GB/s)'
+
+  ! -------
+  ! copyMat
+  ! -------
+
+  write(*,'(a25)', advance='NO') 'copy'
+
+  matCpy_d = -1.0
+
+  istat = cudaEventRecord(startEvent, 0)
+  do i=1, NUM_REPS
+     call copyMat<<<grid, threadBlock>>>(matCpy_d, matIn_d)
+  end do
+  istat = cudaEventRecord(stopEvent, 0)
+  istat = cudaEventSynchronize(stopEvent)
+  istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+
+  matCpy = matCpy_d
+  call postprocess(matIn, matCpy, time)
+
+  ! -------------
+  ! copySharedMem 
+  ! -------------
+
+  write(*,'(a25)', advance='NO') 'shared memory copy'
+
+  matCpy_d = -1.0
+
+  istat = cudaEventRecord(startEvent, 0)
+  do i=1, NUM_REPS
+     call copySharedMem<<<grid, threadBlock>>>(matCpy_d, matIn_d)
+  end do
+  istat = cudaEventRecord(stopEvent, 0)
+  istat = cudaEventSynchronize(stopEvent)
+  istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+
+  matCpy = matCpy_d
+  call postprocess(matIn, matCpy, time)
+
+  ! --------------
+  ! transposeNaive 
+  ! --------------
+
+  write(*,'(a25)', advance='NO') 'naive transpose'
+
+  matTrp_d = -1.0
+
+  istat = cudaEventRecord(startEvent, 0)
+  do i=1, NUM_REPS
+     call transposeNaive<<<grid, threadBlock>>>(matTrp_d, matIn_d)
+  end do
+  istat = cudaEventRecord(stopEvent, 0)
+  istat = cudaEventSynchronize(stopEvent)
+  istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+
+  matTrp = matTrp_d
+  call postprocess(gold, matTrp, time)
+
+  ! ------------------
+  ! transposeCoalesced 
+  ! ------------------
+
+  write(*,'(a25)', advance='NO') 'coalesced transpose'
+
+  matTrp_d = -1.0
+
+  istat = cudaEventRecord(startEvent, 0)
+  do i=1, NUM_REPS
+  call transposeCoalesced<<<grid, threadBlock>>>(matTrp_d, matIn_d)
+  end do
+  istat = cudaEventRecord(stopEvent, 0)
+  istat = cudaEventSynchronize(stopEvent)
+  istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+
+  matTrp = matTrp_d
+  call postprocess(gold, matTrp, time)
+
+  ! ------------------------
+  ! transposeNoBankConflicts
+  ! ------------------------
+
+  write(*,'(a25)', advance='NO') 'conflict-free transpose'
+
+  matTrp_d = -1.0
+
+  istat = cudaEventRecord(startEvent, 0)
+  do i=1, NUM_REPS
+     call transposeNoBankConflicts<<<grid, threadBlock>>>(matTrp_d, matIn_d)
+  end do
+  istat = cudaEventRecord(stopEvent, 0)
+  istat = cudaEventSynchronize(stopEvent)
+  istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+
+  matTrp = matTrp_d
+  call postprocess(gold, matTrp, time)
+
+  ! -----------------
+  ! transposeDiagonal
+  ! -----------------
+
+  write(*,'(a25)', advance='NO') 'diagonal transpose'
+
+  matTrp_d = -1.0
+
+  istat = cudaEventRecord(startEvent, 0)
+  do i=1, NUM_REPS
+     call transposeDiagonal<<<grid, threadBlock>>> (matTrp_d, matIn_d)
+  end do
+  istat = cudaEventRecord(stopEvent, 0)
+  istat = cudaEventSynchronize(stopEvent)
+  istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+
+  matTrp = matTrp_d
+  call postprocess(gold, matTrp, time)
+
+  ! cleanup
+
+  print *
+
+  istat = cudaEventDestroy(startEvent)
+  istat = cudaEventDestroy(stopEvent)  
+
+contains
+
+  subroutine postprocess(ref, res, t)
+    real, intent(in) :: ref(:,:), res(:,:), t          
+    if (all(res == ref)) then
+       write(*,'(f20.2)') 2.0*sizeof(res)*1.0e-6/(t/NUM_REPS)
+    else
+       write(*,'(a20)') '*** Failed ***'
+    end if
+  end subroutine postprocess
+
+end program transposeTest

@@ -1,0 +1,398 @@
+module compact
+
+  ! must be a power of two. shared memory array in kernel
+  ! has compact_tpb*2 (+ compact_pad) integer elements
+  ! as a block of compact_tpb threads processes 2*compact_tpb elements
+  
+  integer, parameter :: compact_tpb = 512
+
+  ! to avoid bank conflicts, pad shared memory array by compact_pad
+  ! in scan kernels and use padi() function to generate indices
+  ! used to access shared memory array
+  
+  integer, parameter :: compact_bankSize = 32
+  integer, parameter :: compact_pad = (2*compact_tpb-1)/compact_bankSize
+
+  interface compact
+     module procedure compactInteger4, compactInteger8, &
+          compactReal4, compactReal8, compactComplex4, compactComplex8
+  end interface compact
+
+contains
+
+  ! shift index i to account for padding in shared memory in scan kernels
+  ! used to avoid shared memory bank conflicts
+  
+  attributes(device) function padi(i) result(res)
+    integer :: i, res
+    res = i + (i-1)/compact_bankSize
+  end function padi
+
+
+  ! creates compacted data and index arrays for
+  ! elements in a_d that satisfy the mask
+  ! 
+  ! esssentially does this, only with device arrays and
+  ! much faster:
+  !
+  ! nc = sum(mask)
+  ! allocate(ac(nc), ic(nc))
+  ! j = 0
+  ! do i = 1, n
+  !   if (mask(i)) then
+  !      j = j + 1
+  !      ac(j) = a(i)
+  !      ic(j) = i
+  !   endif
+  !   if (j == nc) exit
+  ! enddo
+
+
+  subroutine compactInteger4(a_d, mask_d, n, ac_d, ic_d, nc) 
+    use cudafor
+    implicit none
+    integer(4), device, intent(in) :: a_d(n)
+    integer, device, intent(in) :: mask_d(n)
+    integer, intent(in) :: n
+    integer(4), device, allocatable :: ac_d(:)
+    integer, device, allocatable :: ic_d(:)
+    integer, intent(out) :: nc
+    
+    integer, device, allocatable :: index_d(:)
+    integer :: i, nBlocks, nMask
+
+    nBlocks = (n-1)/(2*compact_tpb)+1
+    nMask = nBlocks*(2*compact_tpb)
+    allocate(index_d(0:nMask))
+
+    call indexCalculations(index_d, mask_d, n, nMask, nBlocks)
+    nc = index_d(n)
+    allocate(ac_d(nc), ic_d(nc))
+    !$cuf kernel do <<<*,*>>>
+    do i = 1, n
+       if (mask_d(i) == 1) then
+          ic_d(index_d(i)) = i
+          ac_d(index_d(i)) = a_d(i)
+       end if
+    end do
+    deallocate(index_d)
+  end subroutine compactInteger4
+
+  subroutine compactInteger8(a_d, mask_d, n, ac_d, ic_d, nc) 
+    use cudafor
+    implicit none
+    integer(8), device, intent(in) :: a_d(n)
+    integer, device, intent(in) :: mask_d(n)
+    integer, intent(in) :: n
+    integer(8), device, allocatable :: ac_d(:)
+    integer, device, allocatable :: ic_d(:)
+    integer, intent(out) :: nc
+    
+    integer, device, allocatable :: index_d(:)
+    integer :: i, nBlocks, nMask
+
+    nBlocks = (n-1)/(2*compact_tpb)+1
+    nMask = nBlocks*(2*compact_tpb)
+    allocate(index_d(0:nMask))
+
+    call indexCalculations(index_d, mask_d, n, nMask, nBlocks)
+    nc = index_d(n)
+    allocate(ac_d(nc), ic_d(nc))
+    !$cuf kernel do <<<*,*>>>
+    do i = 1, n
+       if (mask_d(i) == 1) then
+          ic_d(index_d(i)) = i
+          ac_d(index_d(i)) = a_d(i)
+       end if
+    end do
+    deallocate(index_d)
+  end subroutine compactInteger8
+
+  subroutine compactReal4(a_d, mask_d, n, ac_d, ic_d, nc) 
+    use cudafor
+    implicit none
+    real(4), device, intent(in) :: a_d(n)
+    integer, device, intent(in) :: mask_d(n)
+    integer, intent(in) :: n
+    real(4), device, allocatable :: ac_d(:)
+    integer, device, allocatable :: ic_d(:)
+    integer, intent(out) :: nc
+    
+    integer, device, allocatable :: index_d(:)
+    integer :: i, nBlocks, nMask
+
+    nBlocks = (n-1)/(2*compact_tpb)+1
+    nMask = nBlocks*(2*compact_tpb)
+    allocate(index_d(0:nMask))
+
+    call indexCalculations(index_d, mask_d, n, nMask, nBlocks)
+    nc = index_d(n)
+    allocate(ac_d(nc), ic_d(nc))
+    !$cuf kernel do <<<*,*>>>
+    do i = 1, n
+       if (mask_d(i) == 1) then
+          ic_d(index_d(i)) = i
+          ac_d(index_d(i)) = a_d(i)
+       end if
+    end do
+    deallocate(index_d)
+  end subroutine compactReal4
+
+  subroutine compactReal8(a_d, mask_d, n, ac_d, ic_d, nc) 
+    use cudafor
+    implicit none
+    real(8), device, intent(in) :: a_d(n)
+    integer, device, intent(in) :: mask_d(n)
+    integer, intent(in) :: n
+    real(8), device, allocatable :: ac_d(:)
+    integer, device, allocatable :: ic_d(:)
+    integer, intent(out) :: nc
+    
+    integer, device, allocatable :: index_d(:)
+    integer :: i, nBlocks, nMask
+
+    nBlocks = (n-1)/(2*compact_tpb)+1
+    nMask = nBlocks*(2*compact_tpb)
+    allocate(index_d(0:nMask))
+    
+    call indexCalculations(index_d, mask_d, n, nMask, nBlocks)
+    nc = index_d(n)    
+    allocate(ac_d(nc), ic_d(nc))
+    !$cuf kernel do <<<*,*>>>
+    do i = 1, n
+       if (mask_d(i) == 1) then
+          ic_d(index_d(i)) = i
+          ac_d(index_d(i)) = a_d(i)
+       end if
+    end do
+    deallocate(index_d)
+  end subroutine compactReal8
+
+  subroutine compactComplex4(a_d, mask_d, n, ac_d, ic_d, nc) 
+    use cudafor
+    implicit none
+    complex(4), device, intent(in) :: a_d(n)
+    integer, device, intent(in) :: mask_d(n)
+    integer, intent(in) :: n
+    complex(4), device, allocatable :: ac_d(:)
+    integer, device, allocatable :: ic_d(:)
+    integer, intent(out) :: nc
+    
+    integer, device, allocatable :: index_d(:)
+    integer :: i, nBlocks, nMask
+
+    nBlocks = (n-1)/(2*compact_tpb)+1
+    nMask = nBlocks*(2*compact_tpb)
+    allocate(index_d(0:nMask))
+
+    call indexCalculations(index_d, mask_d, n, nMask, nBlocks)
+    nc = index_d(n)
+    allocate(ac_d(nc), ic_d(nc))
+    !$cuf kernel do <<<*,*>>>
+    do i = 1, n
+       if (mask_d(i) == 1) then
+          ic_d(index_d(i)) = i
+          ac_d(index_d(i)) = a_d(i)
+       end if
+    end do
+    deallocate(index_d)
+  end subroutine compactComplex4
+
+  subroutine compactComplex8(a_d, mask_d, n, ac_d, ic_d, nc) 
+    use cudafor
+    implicit none
+    complex(8), device, intent(in) :: a_d(n)
+    integer, device, intent(in) :: mask_d(n)
+    integer, intent(in) :: n
+    complex(8), device, allocatable :: ac_d(:)
+    integer, device, allocatable :: ic_d(:)
+    integer, intent(out) :: nc
+    
+    integer, device, allocatable :: index_d(:)
+    integer :: i, nBlocks, nMask
+
+    nBlocks = (n-1)/(2*compact_tpb)+1
+    nMask = nBlocks*(2*compact_tpb)
+    allocate(index_d(0:nMask))
+    
+    call indexCalculations(index_d, mask_d, n, nMask, nBlocks)
+    nc = index_d(n)    
+    allocate(ac_d(nc), ic_d(nc))
+    !$cuf kernel do <<<*,*>>>
+    do i = 1, n
+       if (mask_d(i) == 1) then
+          ic_d(index_d(i)) = i
+          ac_d(index_d(i)) = a_d(i)
+       end if
+    end do
+    deallocate(index_d)
+  end subroutine compactComplex8
+
+  ! IndexCalculations
+  ! generates the exclusive prefix sum in index_d() of mask_d
+  ! NB: in calling code index_d(0:nMask) but here it is (1:nMask+1)
+  
+  subroutine indexCalculations(index_d, mask_d, n, nMask, nBlocks)
+    implicit none
+    integer, device :: index_d(:)  
+    integer, device :: mask_d(:)
+    integer :: n, nMask, nBlocks
+    
+    integer, device, allocatable :: partialSum_d(:)
+    integer :: i, j
+
+    !$cuf kernel do <<<*,*>>>
+    do i = 1, n
+       index_d(i) = mask_d(i)
+    end do
+    
+    allocate(partialSum_d(nBlocks))
+    
+    ! do block-wise (exclusive) scan
+    call scan<<<nBlocks, compact_tpb>>>(index_d, partialSum_d)
+    
+    ! calculate (exclusive) cumulative block sum from partial sums
+    call singleBlockScan<<<1,compact_tpb>>>(partialSum_d, nBlocks)
+
+    ! add in the cumulative block sums
+    !$cuf kernel do <<<*,*>>>
+    do i = 2*compact_tpb+1, nMask
+       j = (i-1)/(2*compact_tpb)+1
+       index_d(i) = index_d(i) + partialSum_d(j)
+    enddo
+          
+    ! exclusive to inclusive scan, add last element and
+    ! ignore the first
+    !$cuf kernel do <<<1,1>>>
+    do i = n, n
+       index_d(i+1) = index_d(i) + mask_d(i)
+    end do
+
+    deallocate(partialSum_d)
+  end subroutine indexCalculations
+
+  ! SingleBlockScan
+  ! performs exclusive scan on array of any length
+  ! using a single thread block to avoid recursive
+  ! calls needed to calculate cumulative block sums.
+  !
+  ! call with <<<1,compact_tpb>>>
+  
+  attributes(global) subroutine singleBlockScan(a, n)
+    implicit none
+    integer :: a(*)
+    integer, value :: n  ! size of a_d in elements
+    integer, shared :: s(2*compact_tpb + compact_pad)
+    integer :: tid, gid, stride, nr, i1, i2, t
+    integer :: blockIdx_x, blockSum, cumulativeSum
+    
+    tid = threadIdx%x
+    cumulativeSum = 0
+    blockIdx_x = 1
+    do
+       gid = (blockIdx_x-1)*blockDim%x*2 + tid    
+       s(padi(tid)) = a(gid)
+       s(padi(tid+compact_tpb)) = a(gid+compact_tpb)
+
+       stride = 1
+       nr = compact_tpb
+       do
+          call syncthreads()
+          if (nr == 0) exit
+          if (tid <= nr) then
+             i1 = padi(stride*(2*(tid-1)+1))
+             i2 = padi(stride*(2*(tid-1)+2))
+             s(i2) = s(i2)+s(i1)
+          endif
+          stride = stride*2
+          nr = nr/2
+       end do
+
+       blockSum = s(padi(2*compact_tpb))
+       call syncthreads()
+       if (tid == compact_tpb) then
+          s(padi(2*compact_tpb)) = 0
+       endif
+       call syncthreads()
+       
+       stride = compact_tpb
+       nr = 1
+       do
+          if (tid <= nr) then
+             i1 = padi(stride*(2*(tid-1)+1))
+             i2 = padi(stride*(2*(tid-1)+2))
+             t = s(i1)
+             s(i1) = s(i2)
+             s(i2) = s(i2)+t
+          end if
+          stride = stride/2
+          call syncthreads()
+          if (stride == 0) exit
+          nr=nr*2
+       enddo
+       a(gid) = s(padi(tid)) + cumulativeSum
+       a(gid+compact_tpb) = s(padi(tid+compact_tpb)) + cumulativeSum
+       if (blockIdx_x*compact_tpb*2 >= n) exit
+       blockIdx_x = blockIdx_x + 1
+       cumulativeSum = cumulativeSum + blockSum
+    end do
+  end subroutine singleBlockScan
+
+  ! calculates block-wise exclusive prefix sum for a (in place),
+  ! each block stores the sum of elements in the block in pSum(blockIdx%x)
+    
+  attributes(global) subroutine scan(a, pSum)
+    implicit none
+    integer :: a(*), pSum(*)
+
+    integer, shared :: s(2*compact_tpb + compact_pad)
+    integer :: tid, gid, stride, nr, i1, i2, t
+    
+    tid = threadIdx%x
+    gid = (blockIdx%x-1)*blockDim%x*2 + tid
+    
+    s(padi(tid)) = a(gid)
+    s(padi(tid+compact_tpb)) = a(gid+compact_tpb)
+
+    stride = 1
+    nr = compact_tpb
+    do
+       call syncthreads()
+       if (nr == 0) exit
+       if (tid <= nr) then
+          i1 = padi(stride*(2*(tid-1)+1))
+          i2 = padi(stride*(2*(tid-1)+2))
+          s(i2) = s(i2)+s(i1)
+       endif
+       stride = stride*2
+       nr = nr/2
+    end do
+
+    if (tid == compact_tpb) then
+       pSum(blockIdx%x) = s(padi(2*compact_tpb))    
+       s(padi(2*compact_tpb)) = 0
+    endif
+    call syncthreads()
+    
+    stride = compact_tpb
+    nr = 1
+    do
+       if (tid <= nr) then
+          i1 = padi(stride*(2*(tid-1)+1))
+          i2 = padi(stride*(2*(tid-1)+2))
+          t = s(i1)
+          s(i1) = s(i2)
+          s(i2) = s(i2)+t
+       end if
+       stride = stride/2
+       call syncthreads()
+       if (stride == 0) exit
+       nr=nr*2
+    enddo
+    a(gid) = s(padi(tid))
+    a(gid+compact_tpb) = s(padi(tid+compact_tpb))
+  end subroutine scan
+
+end module compact
+
+  

@@ -1,0 +1,58 @@
+program main
+  use mpi
+  use mpiDeviceUtil
+  use cudafor
+  implicit none
+
+  ! global array size
+  integer, parameter :: n = 1024*1024
+  ! mpi 
+  character (len=MPI_MAX_PROCESSOR_NAME) :: hostname
+  integer :: myrank, nprocs, ierr, namelength
+  ! device 
+  type(cudaDeviceProp) :: prop
+  integer(cuda_count_kind) :: freeB, totalB, freeA, totalA 
+  real, device, allocatable :: d(:)
+  integer :: deviceID, i, istat
+
+  call MPI_Init(ierr)
+  call MPI_Comm_rank(MPI_COMM_WORLD, myrank, ierr)
+  call MPI_Comm_size(MPI_COMM_WORLD, nProcs, ierr)
+
+  ! get and set unique device 
+  call assignDevice(deviceID)
+
+  ! print hostname and device ID for each rank
+  call MPI_Get_processor_name(hostname, namelength, ierr)
+  do i = 0, nProcs-1
+     call MPI_Barrier(MPI_COMM_WORLD, ierr)
+     if (i == myrank) &
+          print "('[',i0,'] host: ', a, ',  device: ', i0)", &
+          myrank, trim(hostname), deviceID
+  enddo
+
+  ! get memory use before large allocations, 
+  call MPI_Barrier(MPI_COMM_WORLD, ierr)
+  istat = cudaMemGetInfo(freeB, totalB)
+
+  ! allocate memory on each device
+  call MPI_Barrier(MPI_COMM_WORLD, ierr)
+  allocate(d(n)) 
+
+  ! Get free memory after allocation
+  call MPI_Barrier(MPI_COMM_WORLD, ierr)
+  istat = cudaMemGetInfo(freeA, totalA)
+
+  do i = 0, nProcs-1
+     call MPI_Barrier(MPI_COMM_WORLD, ierr)
+     if (i == myrank) &
+          print "('  [', i0, '] ', & 
+          'device arrays allocated: ', i0)", &
+          myrank, (freeB-freeA)/n/4    
+  end do
+
+  deallocate(d)
+  call MPI_Finalize(ierr)  
+end program main
+
+

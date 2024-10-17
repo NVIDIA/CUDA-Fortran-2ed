@@ -1,0 +1,42 @@
+program defaultStream
+  use cudafor
+  implicit none
+  integer, parameter :: n=100000
+  real, device, allocatable :: a_d(:), b_d(:)
+  real :: a(n), b(n)
+  integer(kind=cuda_stream_kind) :: stream1
+  integer :: istat, i
+
+  istat = cudaStreamCreate(stream1)
+
+  allocate(a_d(n))
+  a_d = 1.0
+  !$cuf kernel do <<<1,1>>>
+  do i = 1, n
+     a_d(i) = a_d(i) + i
+  enddo
+  a = a_d
+  print *, maxval(a_d)
+  
+  istat = cudaforSetDefaultStream(stream1)
+  allocate(b_d(n))
+
+  a_d = 2.0
+  !$cuf kernel do <<<1,1>>>
+  do i = 1, n
+     a_d(i) = a_d(i) + i
+  enddo
+  a = a_d
+  print *, maxval(a_d)
+
+  b_d = 3.0
+  !$cuf kernel do <<<1,1>>>
+  do i = 1, n
+     b_d(i) = b_d(i) + i
+  enddo
+  b = b_d
+  print *, maxval(b_d)
+  
+  istat = cudaStreamDestroy(stream1)
+  deallocate(a_d, b_d)
+end program defaultStream

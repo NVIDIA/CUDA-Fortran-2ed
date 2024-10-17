@@ -1,0 +1,10 @@
+program sliceTransfer
+  implicit none
+  integer, parameter :: nx=128, ny=128, nz=128
+  real :: a(nx,ny,nz)
+  real, device :: a_d(nx,ny,nz)
+
+  a = 0.0
+  a_d(2:nx-1,:,:) = a(2:nx-1,:,:)
+  
+end program sliceTransfer
