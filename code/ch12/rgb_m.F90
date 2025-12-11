@@ -50,7 +50,7 @@ contains
   function rgbTimesR3(rgbin, rin) result(res)
     type(rgb), intent(in) :: rgbin
     real(4), intent(in) :: rin(3)
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgbin%v * rin
   end function rgbTimesR3
 
@@ -58,14 +58,14 @@ contains
   function r3TimesRgb(rin, rgbin) result(res)
     real(4), intent(in) :: rin(3)
     type(rgb), intent(in) :: rgbin
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgbin%v * rin
   end function r3TimesRgb
 
   !@cuf attributes(device) &
   function rgbTimesRgb(rgb1, rgb2) result(res)
     type(rgb), intent(in) :: rgb1, rgb2
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgb1%v * rgb2%v
   end function rgbTimesRgb
 
@@ -73,7 +73,7 @@ contains
   function rgbTimesR(rgbin, rin) result(res)
     type(rgb), intent(in) :: rgbin
     real(4), intent(in) :: rin
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgbin%v * rin
   end function rgbTimesR
 
@@ -81,7 +81,7 @@ contains
   function rTimesRgb(rin, rgbin) result(res)
     real(4), intent(in) :: rin
     type(rgb), intent(in) :: rgbin
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgbin%v * rin
   end function rTimesRgb
 
@@ -89,7 +89,7 @@ contains
   function rgbDivR3(rgbin, rin) result(res)
     type(rgb), intent(in) :: rgbin
     real(4), intent(in) :: rin(3)
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgbin%v / rin
   end function rgbDivR3
 
@@ -97,7 +97,7 @@ contains
   function rgbDivI(rgbin, iin) result(res)
     type(rgb), intent(in) :: rgbin
     integer(4), intent(in) :: iin
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgbin%v / iin
   end function rgbDivI
 
@@ -105,14 +105,14 @@ contains
   function r3DivRgb(rin, rgbin) result(res)
     real(4), intent(in) :: rin(3)
     type(rgb), intent(in) :: rgbin
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgbin%v / rin
   end function r3DivRgb
 
   !@cuf attributes(device) &
   function rgbDivRgb(rgb1, rgb2) result(res)
     type(rgb), intent(in) :: rgb1, rgb2
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgb1%v / rgb2%v
   end function rgbDivRgb
 
@@ -120,7 +120,7 @@ contains
   function rgbPlusR3(rgbin, rin) result(res)
     type(rgb), intent(in) :: rgbin
     real(4), intent(in) :: rin(3)
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgbin%v + rin
   end function rgbPlusR3
 
@@ -128,14 +128,14 @@ contains
   function r3PlusRgb(rin, rgbin) result(res)
     real(4), intent(in) :: rin(3)
     type(rgb), intent(in) :: rgbin
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgbin%v + rin
   end function r3PlusRgb
 
   !@cuf attributes(device) &
   function rgbPlusRgb(rgb1, rgb2) result(res)
     type(rgb), intent(in) :: rgb1, rgb2
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgb1%v + rgb2%v
   end function rgbPlusRgb
 
@@ -143,7 +143,7 @@ contains
   function rgbMinusR3(rgbin, rin) result(res)
     type(rgb), intent(in) :: rgbin
     real(4), intent(in) :: rin(3)
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgbin%v - rin
   end function rgbMinusR3
 
@@ -151,14 +151,14 @@ contains
   function r3MinusRgb(rin, rgbin) result(res)
     real(4), intent(in) :: rin(3)
     type(rgb), intent(in) :: rgbin
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgbin%v - rin
   end function r3MinusRgb
 
   !@cuf attributes(device) &
   function rgbMinusRgb(rgb1, rgb2) result(res)
     type(rgb), intent(in) :: rgb1, rgb2
-    real(4), intent(out) :: res(3)
+    real(4) :: res(3)
     res = rgb1%v - rgb2%v
   end function rgbMinusRgb
 

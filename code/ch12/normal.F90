@@ -154,7 +154,7 @@ program main
   type(rgb) :: fb(nx,ny)
   type(sphere) :: s
 
-  s = sphere([0.0, 0.0, -1], 0.5) 
+  s = sphere([0.0, 0.0, -1.0], 0.5) 
   call render(fb, s)
   
   ! ppm output
