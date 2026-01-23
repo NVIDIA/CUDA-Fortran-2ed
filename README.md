@@ -217,10 +217,10 @@ limitations under the License.
 
   * Section 7.3: `cusparseMV.cuf` and `cusparseMV_ex.cuf` demonstrate use of the cuSPARSE library
 
-  * Section 7.4: ``potr.cuf` demonstrates use of the cuSOLVER library
+  * Section 7.4: `potr.cuf` demonstrates use of the cuSOLVER library
 
   * Section 7.5: `matmulTC.cuf` and `matmulTranspose.cuf` demonstrate
-  use of the tensor core library through and overloaded `matmul()` routine as well as
+  use of the tensor core library through an overloaded `matmul()` routine as well as
   through the cuBLAS interfaces through the use of the `cutensorEx` module
 
   * Section 7.5.1: `cutensorContraction.cuf` illustrates use of the low-level cuTENSOR
