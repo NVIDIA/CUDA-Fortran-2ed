@@ -12,7 +12,7 @@ program fft_test_r2c
   real(fp_kind) :: twopi=8._fp_kind*atan(1._fp_kind),h
   
   interface cufftExec
-     module procedure cufftExecR2C,cufftExecD2Z
+     procedure :: cufftExecR2C,cufftExecD2Z
   end interface cufftExec
   
   n=16 

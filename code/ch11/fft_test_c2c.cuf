@@ -7,7 +7,7 @@ program fft_test_c2c
   complex(fp_kind), allocatable, device :: cinput_d(:),coutput_d(:)
 
   interface cufftExec
-     module procedure cufftExecC2C,cufftExecZ2Z
+     procedure :: cufftExecC2C,cufftExecZ2Z
   end interface cufftExec
 
   integer :: i,n,plan,istat

@@ -216,7 +216,7 @@ program transposeMPI
              2.*(nRows*nCols*4)/(1.0e+9*(timeStop-timeStart)) 
      endif
   else
-     write(*,"('[',i0,']', *** Failed ***,/)") myrank
+     write(*,"('[',i0,'], *** Failed ***',/)") myrank
   endif
 
   ! cleanup

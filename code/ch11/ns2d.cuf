@@ -27,11 +27,11 @@ program ns2d
        v_x(:,:), v_y(:,:)
   real(fp_kind), allocatable, managed :: x(:),y(:),k_x(:), k_y(:),k_x2(:),k_y2(:)
   real(fp_kind), allocatable :: sol_host(:,:)
-  real(fp_kind) :: k_max, sigma, lap, hypervisc, norm, alpha(nns)
+  real(fp_kind) :: sigma, lap, hypervisc, norm, alpha(nns)
   real(fp_kind) :: delta_t, dx, dy, k4, Tmax, Tprint, time, L
   integer :: i, j, ns, N, Nh,  Nsol ,istat, giter, iter, iter_max,iter_plot
   integer :: cufft_plan_r2c, cufft_plan_c2r
-  integer :: num_plot
+  integer :: num_plot, k_max
   character(len=12) :: string
   real :: time1,time2
 

@@ -12,7 +12,7 @@ program fft_derivative
   real(fp_kind) :: twopi=8._fp_kind*atan(1._fp_kind), h
 
   interface cufftExec
-     module procedure cufftExecC2C, cufftExecZ2Z
+     procedure :: cufftExecC2C, cufftExecZ2Z
   end interface cufftExec
 
   n=8
