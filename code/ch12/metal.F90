@@ -413,9 +413,12 @@ program main
 
 
   type(lambertian)  :: lambArr(2)
-  !@cuf attributes(device) :: lambArr
   type(metal) :: metalArr(2)
-  !@cuf attributes(device) :: metalArr
+#ifdef _CUDA
+  attributes(device) :: lambArr, metalArr
+#else
+  target :: lambArr, metalArr
+#endif
   type(c_hostDevPtr) :: cPtr
   
   ! setup environment

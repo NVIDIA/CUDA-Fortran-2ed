@@ -760,21 +760,25 @@ program main
   integer :: i, j
   type(rgb) :: fb(nx,ny)
   type(environs) :: env
-  !@cuf attributes(managed) :: env
+#ifdef _CUDA
+  attributes(managed) :: env
+#else
+  target :: env
+#endif
   type(camera) :: cam
   !@cuf attributes(managed) :: cam
 
   
   type(lambertian) :: lambArr(3)
-  !@cuf attributes(device) :: lambArr
   type(metal) :: metalArr(1)
-  !@cuf attributes(device) :: metalArr
   type(dielectric) :: dielArr(1)
-  !@cuf attributes(device) :: dielArr
   type(light) :: lightArr(1)
-  !@cuf attributes(device) :: lightArr
   type(checkerTexture) :: checkTex(1)
-  !@cuf attributes(device) :: checkTex
+#ifdef _CUDA
+  attributes(device) :: lambArr, metalArr, dielArr, lightArr, checkTex
+#else
+  target :: lambArr, metalArr, dielArr, lightArr, checkTex
+#endif
   type(c_hostDevPtr) :: cPtr, cOddPtr, cEvenPtr
   
   ! setup environment

@@ -665,17 +665,22 @@ program main
   integer :: i, j
   type(rgb) :: fb(nx,ny)
   type(environs) :: env
-  !@cuf attributes(managed) :: env
-
+#ifdef _CUDA
+  attributes(managed) :: env
+#else
+  target :: env
+#endif
   type(camera) :: cam
   !@cuf attributes(managed) :: cam
 
   type(lambertian) :: lambArr(2)
-  !@cuf attributes(device) :: lambArr
   type(metal) :: metalArr(2)
-  !@cuf attributes(device) :: metalArr
   type(dielectric) :: dielArr(1)
-  !@cuf attributes(device) :: dielArr
+#ifdef _CUDA
+  attributes(device) :: lambArr, metalArr, dielArr
+#else
+  target :: lambArr, metalArr, dielArr
+#endif  
   type(c_hostDevPtr) :: cPtr
 
   ! setup environment

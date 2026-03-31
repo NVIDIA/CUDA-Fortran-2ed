@@ -582,11 +582,13 @@ program main
   integer :: ia, ib
 
   type(lambertian) :: lambArr(maxNSpheres)
-  !@cuf attributes(device) :: lambArr
   type(metal) :: metalArr(maxNSpheres)
-  !@cuf attributes(device) :: metalArr
   type(dielectric) :: dielArr(maxNSpheres)
-  !@cuf attributes(device) :: dielArr
+#ifdef _CUDA
+  attributes(device) :: lambArr, metalArr, dielArr
+#else
+  target :: lambArr, metalArr, dielArr
+#endif
   type(c_hostDevPtr) :: cPtr
   integer :: iLamb, iMetal, iDiel
 
