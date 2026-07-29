@@ -9,13 +9,13 @@ contains
   subroutine union_r4c4(s, d_ptr)
     use iso_c_binding
     implicit none
-    real(4) :: s(:)
-    complex(4), pointer :: d_ptr(:)
+    real(c_float), target, contiguous :: s(:)
+    complex(c_float_complex), pointer :: d_ptr(:)
     type(c_ptr) :: s_cptr
     integer :: d_shape(1)
 
     d_shape(1) = size(s)/2   
-    s_cptr = transfer(loc(s), s_cptr)
+    s_cptr = c_loc(s(1))
     call c_f_pointer(s_cptr, d_ptr, d_shape)
   end subroutine union_r4c4
 
