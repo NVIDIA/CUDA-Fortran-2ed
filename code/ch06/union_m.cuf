@@ -12,10 +12,10 @@ contains
     real(c_float), target :: s(:)
     complex(c_float_complex), pointer :: d_ptr(:)
     type(c_ptr) :: s_cptr
-    integer :: d_shape(1)
+    integer(c_int) :: d_shape(1)
 
     d_shape(1) = size(s)/2   
-    s_cptr = c_loc(s(1))
+    s_cptr = c_loc(s)
     call c_f_pointer(s_cptr, d_ptr, d_shape)
   end subroutine union_r4c4
 
