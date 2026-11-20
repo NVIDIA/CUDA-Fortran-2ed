@@ -1,5 +1,7 @@
 OBJS = finiteDifference finiteDifferenceStr limitingFactor laplace2D
 
+all: $(OBJS)
+
 # section 10.1.*
 
 finiteDifference: precision_m.cuf derivative_m.cuf finiteDifference.cuf 

@@ -2,6 +2,8 @@ OBJS = callingC sgemmLegacy sgemmNew getrfBatched gemmPerf \
        cusparseMV cusparseMV_Ex potr matmulTC matmulTranspose \
        cutensorContraction testSort
 
+all: $(OBJS)
+
 ARCH=sm_75
 GPU=cc75
 

@@ -5,6 +5,8 @@ OBJS = twoKernels pipeline streamSync eventSync \
        raceAndAtomic raceAndAtomicShared threadfence cgReverse \
        smooth swap
 
+all: $(OBJS)
+
 # section 4.1.2.1
 
 twoKernels: twoKernels.cuf

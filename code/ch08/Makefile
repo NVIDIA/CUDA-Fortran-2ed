@@ -1,6 +1,8 @@
 OBJS = minimal p2pAccess directTransfer p2pBandwidth \
        transposeP2P mpiDevices assignDevice transposeMPI transposeCAMPI
 
+all: $(OBJS)
+
 # section 8.1
 
 minimal: minimal.cuf
