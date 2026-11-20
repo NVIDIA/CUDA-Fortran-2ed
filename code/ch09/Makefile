@@ -2,6 +2,8 @@ OBJS = rng_gpu_sp rng_gpu_dp pi_sp pi_dp ieee_accuracy \
        pi_performance_sp shflExample testPiGridGroup \
        accuracy_sum mc_european_single mc_european_double
 
+all: $(OBJS)
+
 
 # section 9.1
 

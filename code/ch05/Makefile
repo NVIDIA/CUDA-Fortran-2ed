@@ -3,6 +3,8 @@ OBJS = HDtransfer sliceTransfer async \
        maxSharedMemory transpose \
        parallelism parallelismPipeline cufILP fma
 
+all: $(OBJS)
+
 
 # section 5.1.1
 

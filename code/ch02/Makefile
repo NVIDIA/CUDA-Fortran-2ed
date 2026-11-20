@@ -1,5 +1,7 @@
 OBJS = accuracy fma print debug memcheck initcheck
 
+all: $(OBJS)
+
 # section 2.1.1
 
 accuracy: accuracy.cuf

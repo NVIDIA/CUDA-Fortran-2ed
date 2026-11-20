@@ -17,6 +17,8 @@ OBJS = 	ppmExampleHost ppmExampleCUDA \
 	lightsHost lightsCUDA \
 	textureHost textureCUDA
 
+all: $(OBJS)
+
 # section 12.1
 
 ppmExampleHost: ppmExample.f90

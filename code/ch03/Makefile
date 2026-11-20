@@ -1,6 +1,8 @@
 OBJS = events multidim nvtxBasic nvtxAdv nvtxAdv2 nvtxAuto \
 	limitingFactor peakBandwidth effectiveBandwidth
 
+all: $(OBJS)
+
 # section 3.1.2
 
 events: events.cuf

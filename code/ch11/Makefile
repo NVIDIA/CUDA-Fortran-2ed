@@ -1,6 +1,8 @@
 OBJS = fft_test_c2c_sp fft_test_c2c_dp fft_test_r2c_sp fft_test_r2c_dp \
        spectral_sp spectral_dp exampleOverlapFFT ns2d_sp ns2d_dp
 
+all: $(OBJS)
+
 # section 11.1
 
 fft_test_c2c_sp: precision_m.F90 fft_test_c2c.cuf

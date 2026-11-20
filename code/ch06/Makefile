@@ -8,6 +8,8 @@ OBJS = portingBase portingManaged portingDevice \
        laplace2DAssoc_HOST laplace2DAssoc_CUDA test_union \
        test_union testCompact testCompactOpt
 
+all: $(OBJS)
+
 # section 6.1
 
 portingBase: portingBase.f90
